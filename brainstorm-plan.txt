@@ -25,8 +25,10 @@ no time to fiddle with settings).
 
 DECISIONS MADE SO FAR
 ----------------------
-- Networking: cloud backend (Firebase), not a local laptop server - assumes
-  workable cell data at the launch site.
+- Networking: cloud backend, not a local laptop server - assumes workable
+  cell data at the launch site.
+- Backend/stack: multi-user Django app with PostgreSQL (see STACK section
+  below) - replaces the earlier Firebase-based sketch.
 - Station positioning: manual entry (distance paced/measured + compass
   bearing captured by pointing at the pad), not raw GPS - GPS error is too
   large relative to a ~100 ft baseline.
@@ -42,27 +44,49 @@ DECISIONS MADE SO FAR
 ARCHITECTURE
 ============
 
-Stack: single web app, two views ("/control" for iPad, "/station" for
-iPhones), plain HTML/JS/CSS or a very light framework - avoid a heavy build
-setup for something this deploy-once/edit-rarely. Hosted as a static site on
-Firebase Hosting. Backend is Firebase, no custom server:
+STACK: Multi-user Django web app backed by PostgreSQL. One Django project,
+two front-end views/templates ("/control" for the iPad, "/station" for each
+iPhone), served to all devices as normal browser clients over the network -
+no native app needed on either device.
 
-  - Firestore: session/launch metadata, station roster + calibration,
-    per-station and final computed altitude results. Low-frequency,
-    document-oriented data - good fit.
-  - Each station's raw angle-vs-time buffer uploads once per launch, right
-    after landing. A ~20 second flight at ~30Hz with a few numbers per
-    sample is small enough to store as one Firestore document (no need for
-    separate file storage or a live stream).
-  - Firebase Auth (anonymous): gives each phone a stable identity for the
-    session so the iPad can tell stations apart and reconnect if a phone
-    refreshes.
+  - Django + Django REST Framework: request/response endpoints for creating
+    sessions/launches, registering stations, submitting calibration, and
+    uploading each station's buffered sample array after a flight.
+  - Django Channels (WebSockets, backed by Redis as the channel layer):
+    real-time push for the stuff that needs to feel instant - countdown/
+    "launched"/"landed" status changes broadcast from the iPad to every
+    connected station, and live roster updates (which stations are
+    connected/calibrated/ready) shown back on the iPad. Each session gets
+    its own channel group.
+  - PostgreSQL: durable storage for everything - Session, Launch, Station
+    (per-launch calibration: distance + bearing + ready state), Sample data
+    (each station's uploaded angle-vs-time buffer, e.g. as a JSONField or a
+    normalized Sample table keyed by launch+station), and Result (the
+    computed best-altitude estimate + each station's individual estimate).
+  - Django auth: real user accounts for leaders/operators (multi-user in
+    the sense that more than one adult leader could run/administer
+    sessions), while each iPhone "station" just needs a lightweight
+    per-session identity (e.g. a device token stored in local storage) - it
+    doesn't need a full login, just to be told apart from other stations.
+  - Triangulation now runs server-side in Django (plain Python, numpy is a
+    natural fit for the linear-algebra multilateration step) rather than in
+    iPad browser JS - the server computes the result once all stations for
+    a launch have uploaded, then pushes it down over the same WebSocket
+    channel/or the iPad polls a REST endpoint.
+  - Hosting: Django needs an actual running server process (unlike a static
+    site), so this needs to live somewhere reachable by every device on
+    launch day - e.g. a small always-on cloud host (a $5-10/mo VPS, or a
+    platform like Railway/Render/Fly.io) with a managed or bundled Postgres
+    instance. Keeps the "cloud backend, assumes cell data at the site"
+    decision from before, just with you owning the actual server instead of
+    using a BaaS.
 
 No live 30Hz network stream is needed. Each phone buffers its own sensor
 readings LOCALLY during the flight and uploads the whole buffer once, right
-after landing. This is simpler and more robust than live streaming - if a
-phone's connection hiccups mid-flight, its local buffer is untouched, and
-the upload happens once things are calm (rocket already down).
+after landing, via a normal POST to the Django backend. This is simpler and
+more robust than live streaming - if a phone's connection hiccups
+mid-flight, its local buffer is untouched, and the upload happens once
+things are calm (rocket already down).
 
 SESSION / LAUNCH FLOW
 ----------------------
@@ -90,9 +114,10 @@ SESSION / LAUNCH FLOW
    fires automatically). Each station sees this, stops buffering, and
    immediately uploads its full sample array.
 6. Once all registered stations have uploaded (or a short grace timeout
-   elapses so one dropped phone doesn't block the group), the iPad runs the
-   triangulation + outlier-rejection pass and displays the best-guess max
-   altitude, plus each station's individual estimate for comparison.
+   elapses so one dropped phone doesn't block the group), the Django
+   backend runs the triangulation + outlier-rejection pass and pushes the
+   best-guess max altitude to the iPad, plus each station's individual
+   estimate for comparison.
 
 
 CLINOMETER (IPHONE) UX
@@ -122,8 +147,8 @@ CLINOMETER (IPHONE) UX
   numbers already exist.
 
 
-ALTITUDE COMPUTATION (ON THE IPAD)
-=====================================
+ALTITUDE COMPUTATION (SERVER-SIDE, IN DJANGO)
+=================================================
 Each station contributes a time series of "rays": from a known fixed 2D
 ground position (distance + bearing from pad) and a time-varying elevation
 + azimuth angle. With 2+ stations, triangulation works like this:
