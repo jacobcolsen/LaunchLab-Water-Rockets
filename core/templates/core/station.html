@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clinometer Station</title>
+  <style>
+    body { font-family: sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
+    label { display: block; margin-top: 1rem; font-weight: bold; }
+    input { width: 100%; font-size: 1.2rem; padding: 0.5rem; margin-top: 0.25rem; box-sizing: border-box; }
+    button { margin-top: 1.5rem; font-size: 1.2rem; padding: 0.75rem 1rem; width: 100%; }
+    .ready-banner { background: #e6f4ea; color: #1a7f37; padding: 1rem; border-radius: 8px; font-size: 1.3rem; text-align: center; }
+    .error { color: #b42318; }
+  </style>
+</head>
+<body>
+  {% if not session_id %}
+    <p class="error">No session specified. Ask the launch control operator for the join link.</p>
+  {% else %}
+    <div id="form-view">
+      <h1>Join Station</h1>
+      <form id="calibration-form">
+        <label for="label">Your name / station label</label>
+        <input type="text" id="label" required>
+
+        <label for="distance_ft">Distance to pad (feet)</label>
+        <input type="number" id="distance_ft" step="any" required>
+
+        <label for="bearing_degrees">Bearing to pad (degrees, 0-360)</label>
+        <input type="number" id="bearing_degrees" step="any" min="0" max="360" required>
+
+        <button type="submit">Register Station</button>
+      </form>
+    </div>
+    <div id="ready-view" style="display:none;">
+      <div class="ready-banner">
+        ✅ Registered — <span id="ready-label"></span><br>
+        <span id="ready-details"></span>
+      </div>
+    </div>
+  {% endif %}
+
+  <script>
+    const sessionId = {{ session_id|default:"null" }};
+    const storageKey = `station-${sessionId}`;
+
+    function showReady(info) {
+      document.getElementById('form-view').style.display = 'none';
+      const readyView = document.getElementById('ready-view');
+      readyView.style.display = 'block';
+      document.getElementById('ready-label').textContent = info.label;
+      document.getElementById('ready-details').textContent =
+        `${info.distance_ft} ft, bearing ${info.bearing_degrees}°`;
+    }
+
+    if (sessionId) {
+      const cached = localStorage.getItem(storageKey);
+      if (cached) {
+        showReady(JSON.parse(cached));
+      } else {
+        document.getElementById('calibration-form').addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const payload = {
+            label: document.getElementById('label').value,
+            distance_ft: parseFloat(document.getElementById('distance_ft').value),
+            bearing_degrees: parseFloat(document.getElementById('bearing_degrees').value),
+          };
+          const res = await fetch(`/api/sessions/${sessionId}/stations/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const data = await res.json();
+          localStorage.setItem(storageKey, JSON.stringify(data));
+          showReady(data);
+        });
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Launch Control</title>
+  <style>
+    body { font-family: sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { margin-bottom: 0.25rem; }
+    .hint { color: #555; margin-bottom: 1.5rem; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+    th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; }
+    .ready { color: #1a7f37; font-weight: bold; }
+    .not-ready { color: #b54708; font-weight: bold; }
+    input, button { font-size: 1rem; padding: 0.5rem; }
+    #join-url { font-weight: bold; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>Launch Control</h1>
+
+  {% if not session_id %}
+    <p class="hint">Create a session to get started.</p>
+    <form id="create-session-form">
+      <input type="text" id="session-name" placeholder="Session name (e.g. Ward Activity 7/25)" required>
+      <button type="submit">Create Session</button>
+    </form>
+  {% else %}
+    <p class="hint">
+      Stations should open:
+      <span id="join-url"></span>
+    </p>
+    <h2 id="session-name-display">Loading…</h2>
+    <table>
+      <thead>
+        <tr><th>Station</th><th>Distance (ft)</th><th>Bearing (°)</th><th>Status</th></tr>
+      </thead>
+      <tbody id="roster-body">
+        <tr><td colspan="4">Loading roster…</td></tr>
+      </tbody>
+    </table>
+  {% endif %}
+
+  <script>
+    const sessionId = {{ session_id|default:"null" }};
+
+    if (!sessionId) {
+      document.getElementById('create-session-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('session-name').value;
+        const res = await fetch('/api/sessions/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        window.location = `/control?session=${data.id}`;
+      });
+    } else {
+      document.getElementById('join-url').textContent =
+        `${window.location.origin}/station?session=${sessionId}`;
+
+      async function refreshRoster() {
+        const res = await fetch(`/api/sessions/${sessionId}/stations/`);
+        if (!res.ok) return;
+        const stations = await res.json();
+        const body = document.getElementById('roster-body');
+        if (stations.length === 0) {
+          body.innerHTML = '<tr><td colspan="4">No stations yet.</td></tr>';
+          return;
+        }
+        body.innerHTML = stations.map((s) => `
+          <tr>
+            <td>${s.label}</td>
+            <td>${s.distance_ft}</td>
+            <td>${s.bearing_degrees}</td>
+            <td class="${s.ready ? 'ready' : 'not-ready'}">${s.ready ? 'Ready' : 'Not Ready'}</td>
+          </tr>
+        `).join('');
+      }
+
+      refreshRoster();
+      setInterval(refreshRoster, 3000);
+    }
+  </script>
+</body>
+</html>

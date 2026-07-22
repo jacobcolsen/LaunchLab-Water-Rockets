@@ -17,9 +17,18 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 
-from core.views import health
+from core.api import SessionCreateView, StationListCreateView
+from core.views import control_view, health, station_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health', health, name='health'),
+    path('control', control_view, name='control'),
+    path('station', station_view, name='station'),
+    path('api/sessions/', SessionCreateView.as_view(), name='api-session-create'),
+    path(
+        'api/sessions/<int:session_id>/stations/',
+        StationListCreateView.as_view(),
+        name='api-station-list-create',
+    ),
 ]
