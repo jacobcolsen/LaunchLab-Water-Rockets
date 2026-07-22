@@ -11,6 +11,14 @@
     button { margin-top: 1.5rem; font-size: 1.2rem; padding: 0.75rem 1rem; width: 100%; }
     .ready-banner { background: #e6f4ea; color: #1a7f37; padding: 1rem; border-radius: 8px; font-size: 1.3rem; text-align: center; }
     .error { color: #b42318; }
+    #flight-banner {
+      margin-top: 1.5rem; padding: 1.5rem; border-radius: 8px; text-align: center;
+      font-size: 2rem; font-weight: bold; letter-spacing: 0.05em;
+    }
+    .banner-waiting { background: #eef1f4; color: #555; }
+    .banner-ready { background: #fff3cd; color: #7a5b00; }
+    .banner-tracking { background: #d8f2df; color: #17632f; }
+    .banner-done { background: #dbe7ff; color: #1d3a8a; }
   </style>
 </head>
 <body>
@@ -37,6 +45,7 @@
         ✅ Registered — <span id="ready-label"></span><br>
         <span id="ready-details"></span>
       </div>
+      <div id="flight-banner" class="banner-waiting">WAITING</div>
     </div>
   {% endif %}
 
@@ -51,6 +60,25 @@
       document.getElementById('ready-label').textContent = info.label;
       document.getElementById('ready-details').textContent =
         `${info.distance_ft} ft, bearing ${info.bearing_degrees}°`;
+      connectStatusSocket();
+    }
+
+    function connectStatusSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${protocol}://${window.location.host}/ws/sessions/${sessionId}/`);
+      ws.onmessage = (event) => {
+        const state = JSON.parse(event.data);
+        const banner = document.getElementById('flight-banner');
+        const status = state.launch ? state.launch.status : null;
+        const display = {
+          null: ['WAITING', 'banner-waiting'],
+          pending: ['READY', 'banner-ready'],
+          launched: ['TRACKING', 'banner-tracking'],
+          landed: ['DONE', 'banner-done'],
+        }[status];
+        banner.textContent = display[0];
+        banner.className = display[1];
+      };
     }
 
     if (sessionId) {

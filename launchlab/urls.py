@@ -17,7 +17,13 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 
-from core.api import SessionCreateView, StationListCreateView
+from core.api import (
+    LaunchCreateView,
+    LaunchMarkLandedView,
+    LaunchMarkLaunchedView,
+    SessionCreateView,
+    StationListCreateView,
+)
 from core.views import control_view, health, station_view
 
 urlpatterns = [
@@ -30,5 +36,20 @@ urlpatterns = [
         'api/sessions/<int:session_id>/stations/',
         StationListCreateView.as_view(),
         name='api-station-list-create',
+    ),
+    path(
+        'api/sessions/<int:session_id>/launches/',
+        LaunchCreateView.as_view(),
+        name='api-launch-create',
+    ),
+    path(
+        'api/launches/<int:launch_id>/launched/',
+        LaunchMarkLaunchedView.as_view(),
+        name='api-launch-launched',
+    ),
+    path(
+        'api/launches/<int:launch_id>/landed/',
+        LaunchMarkLandedView.as_view(),
+        name='api-launch-landed',
     ),
 ]

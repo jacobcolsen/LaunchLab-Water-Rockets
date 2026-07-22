@@ -14,6 +14,9 @@
     .not-ready { color: #b54708; font-weight: bold; }
     input, button { font-size: 1rem; padding: 0.5rem; }
     #join-url { font-weight: bold; word-break: break-all; }
+    .launch-panel { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
+    .launch-panel button { margin-right: 0.5rem; }
+    #conn-status { font-size: 0.85rem; color: #888; }
   </style>
 </head>
 <body>
@@ -30,13 +33,19 @@
       Stations should open:
       <span id="join-url"></span>
     </p>
-    <h2 id="session-name-display">Loading…</h2>
+    <p id="conn-status">connecting…</p>
+
+    <div class="launch-panel">
+      <div id="launch-status">No launch yet.</div>
+      <div id="launch-actions"></div>
+    </div>
+
     <table>
       <thead>
         <tr><th>Station</th><th>Distance (ft)</th><th>Bearing (°)</th><th>Status</th></tr>
       </thead>
       <tbody id="roster-body">
-        <tr><td colspan="4">Loading roster…</td></tr>
+        <tr><td colspan="4">Waiting for data…</td></tr>
       </tbody>
     </table>
   {% endif %}
@@ -60,10 +69,7 @@
       document.getElementById('join-url').textContent =
         `${window.location.origin}/station?session=${sessionId}`;
 
-      async function refreshRoster() {
-        const res = await fetch(`/api/sessions/${sessionId}/stations/`);
-        if (!res.ok) return;
-        const stations = await res.json();
+      function renderRoster(stations) {
         const body = document.getElementById('roster-body');
         if (stations.length === 0) {
           body.innerHTML = '<tr><td colspan="4">No stations yet.</td></tr>';
@@ -79,8 +85,58 @@
         `).join('');
       }
 
-      refreshRoster();
-      setInterval(refreshRoster, 3000);
+      function renderLaunch(launch) {
+        const statusEl = document.getElementById('launch-status');
+        const actionsEl = document.getElementById('launch-actions');
+
+        if (!launch) {
+          statusEl.textContent = 'No launch yet.';
+          actionsEl.innerHTML = '<button id="btn-new-launch">Start New Launch</button>';
+        } else {
+          statusEl.textContent = `Launch #${launch.number} — status: ${launch.status}`;
+          if (launch.status === 'pending') {
+            actionsEl.innerHTML = '<button id="btn-mark-launched">Mark Launched</button>';
+          } else if (launch.status === 'launched') {
+            actionsEl.innerHTML = '<button id="btn-mark-landed">Mark Landed</button>';
+          } else {
+            actionsEl.innerHTML = '<button id="btn-new-launch">Start New Launch</button>';
+          }
+        }
+
+        const newLaunchBtn = document.getElementById('btn-new-launch');
+        if (newLaunchBtn) {
+          newLaunchBtn.addEventListener('click', () =>
+            fetch(`/api/sessions/${sessionId}/launches/`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: '{}',
+            })
+          );
+        }
+        const launchedBtn = document.getElementById('btn-mark-launched');
+        if (launchedBtn) {
+          launchedBtn.addEventListener('click', () =>
+            fetch(`/api/launches/${launch.id}/launched/`, { method: 'POST' })
+          );
+        }
+        const landedBtn = document.getElementById('btn-mark-landed');
+        if (landedBtn) {
+          landedBtn.addEventListener('click', () =>
+            fetch(`/api/launches/${launch.id}/landed/`, { method: 'POST' })
+          );
+        }
+      }
+
+      const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const ws = new WebSocket(`${protocol}://${window.location.host}/ws/sessions/${sessionId}/`);
+
+      ws.onopen = () => { document.getElementById('conn-status').textContent = 'live'; };
+      ws.onclose = () => { document.getElementById('conn-status').textContent = 'disconnected'; };
+      ws.onmessage = (event) => {
+        const state = JSON.parse(event.data);
+        renderRoster(state.stations);
+        renderLaunch(state.launch);
+      };
     }
   </script>
 </body>
