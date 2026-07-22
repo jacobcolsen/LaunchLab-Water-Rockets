@@ -1,0 +1,208 @@
+WATER ROCKET LAUNCH LAB - MULTI-DEVICE ALTITUDE TRACKER
+Brainstorm / Planning Notes
+================================================================
+
+CONTEXT
+-------
+For a water rocket launch day with LDS church youth (ages 12-18). Two device
+roles, at least two devices total:
+
+  - Launch Control (iPad): runs the countdown, tracks sessions/launches,
+    collects data from all connected clinometer stations, computes a
+    best-guess max altitude.
+  - Clinometer (any number of iPhones): each one is a sighting station a
+    youth points at the rocket throughout the flight, standing ~100 ft away
+    (or more/less, if more stations are added) at a known distance/bearing
+    from the pad.
+
+The rocket won't fly perfectly vertical, so a single fixed-angle reading at
+"apex" isn't enough - stations need to track continuously, and the system
+needs to reconstruct where the rocket actually was over time, not just read
+one number off a protractor. The app also needs to combine 1-N clinometers
+gracefully, rejecting bad readings, and must feel effortless for a middle
+schooler to operate correctly under field conditions (sun glare, excitement,
+no time to fiddle with settings).
+
+DECISIONS MADE SO FAR
+----------------------
+- Networking: cloud backend (Firebase), not a local laptop server - assumes
+  workable cell data at the launch site.
+- Station positioning: manual entry (distance paced/measured + compass
+  bearing captured by pointing at the pad), not raw GPS - GPS error is too
+  large relative to a ~100 ft baseline.
+- Altitude method: full-flight time-series triangulation (each phone logs
+  its own angle stream during the flight and uploads it after landing), not
+  a single peak-angle reading - this is what makes drift-tolerance and a
+  smooth (non-jumpy) live UX possible, since heavy smoothing only has to
+  happen in the live display, not in the actual math.
+- Scope: core system first. A menu of optional extras is below for later
+  consideration - nothing in that list is being built yet.
+
+
+ARCHITECTURE
+============
+
+Stack: single web app, two views ("/control" for iPad, "/station" for
+iPhones), plain HTML/JS/CSS or a very light framework - avoid a heavy build
+setup for something this deploy-once/edit-rarely. Hosted as a static site on
+Firebase Hosting. Backend is Firebase, no custom server:
+
+  - Firestore: session/launch metadata, station roster + calibration,
+    per-station and final computed altitude results. Low-frequency,
+    document-oriented data - good fit.
+  - Each station's raw angle-vs-time buffer uploads once per launch, right
+    after landing. A ~20 second flight at ~30Hz with a few numbers per
+    sample is small enough to store as one Firestore document (no need for
+    separate file storage or a live stream).
+  - Firebase Auth (anonymous): gives each phone a stable identity for the
+    session so the iPad can tell stations apart and reconnect if a phone
+    refreshes.
+
+No live 30Hz network stream is needed. Each phone buffers its own sensor
+readings LOCALLY during the flight and uploads the whole buffer once, right
+after landing. This is simpler and more robust than live streaming - if a
+phone's connection hiccups mid-flight, its local buffer is untouched, and
+the upload happens once things are calm (rocket already down).
+
+SESSION / LAUNCH FLOW
+----------------------
+1. iPad operator creates a session (e.g. "Ward Activity 7/25") and captures
+   the pad reference point.
+2. Each iPhone opens the station view for that session (ideally via a QR
+   code shown on the iPad - fastest way for a 12-year-old to join
+   correctly). It then:
+     - Requests motion/orientation permission (iOS requires a tap-triggered
+       permission prompt for device orientation).
+     - Runs a short calibration: enter distance to pad (feet), then hold
+       the phone level and pointed at the pad and tap "Set Bearing" to
+       capture the compass heading as that station's reference azimuth.
+     - Registers itself in the session with its distance + bearing +
+       "ready" status. The iPad's roster view updates live.
+3. iPad operator starts a launch within the session (auto-incrementing
+   launch #). A countdown (5-4-3-2-1) marks the launch as "launched" with a
+   timestamp.
+4. Every station is watching for that status change. The moment it flips to
+   "launched," each phone starts buffering {time, elevation, azimuth}
+   samples locally at ~20-30Hz using wall-clock timestamps (iOS device
+   clocks are already synced tightly enough across devices - this avoids
+   relying on message-delivery-latency jitter to line up streams later).
+5. iPad operator taps "Landed" (or a max-duration safety timeout, e.g. 30s,
+   fires automatically). Each station sees this, stops buffering, and
+   immediately uploads its full sample array.
+6. Once all registered stations have uploaded (or a short grace timeout
+   elapses so one dropped phone doesn't block the group), the iPad runs the
+   triangulation + outlier-rejection pass and displays the best-guess max
+   altitude, plus each station's individual estimate for comparison.
+
+
+CLINOMETER (IPHONE) UX
+========================
+- Full-screen live camera preview as a backdrop with a fixed center
+  crosshair overlay - gives an intuitive "look through a scope" feel. The
+  actual angle comes from the phone's motion sensors, not computer vision -
+  the camera is purely an aiming aid.
+- One job during flight: keep the rocket in the crosshair. No buttons to
+  press, no mode switches - recording start/stop is fully automatic, driven
+  by the iPad's launched/landed signals.
+- Live angle readout is a big, high-contrast number, smoothed with a
+  jitter-reduction filter (e.g. a "one-euro" filter or a simple adaptive
+  moving average) purely for DISPLAY - this is what keeps the on-screen
+  number from feeling jumpy. The RAW, unsmoothed samples are what get
+  buffered and uploaded, since the triangulation math should work from real
+  data, not a laggy filtered version.
+- Calibration screen before each session: distance input (feet) + "Set
+  Bearing" button with a clear "aim at the pad, then tap" instruction and a
+  big confirmation state ("Ready - station is 100 ft, bearing 214 degrees").
+- Status states shown in huge text/color so a 7th grader always knows what
+  to do: Calibrating -> Ready -> Tracking (flight live) -> Uploading ->
+  Done, here's how close you were.
+- Post-flight feedback: show this station's own single-station estimate
+  next to the group's final fused estimate - a small "how close was I"
+  readout. Good for engagement, costs nothing extra to compute since the
+  numbers already exist.
+
+
+ALTITUDE COMPUTATION (ON THE IPAD)
+=====================================
+Each station contributes a time series of "rays": from a known fixed 2D
+ground position (distance + bearing from pad) and a time-varying elevation
++ azimuth angle. With 2+ stations, triangulation works like this:
+
+  1. Time alignment: resample/interpolate every station's stream onto a
+     common time grid (e.g. every 50ms) spanning the flight window, using
+     each sample's wall-clock timestamp.
+  2. Per-timestamp multilateration: at each grid time, each ready station
+     defines a 3D ray (origin = station's ground position, direction =
+     azimuth+elevation). Solve the least-squares point that minimizes total
+     squared perpendicular distance to all rays - a standard closed-form
+     "closest point to multiple lines" calculation, no heavy iterative
+     solver needed.
+  3. Outlier rejection: compute each station's residual (perpendicular
+     distance from its ray to the solved point) at each timestamp. Drop any
+     station whose residual is far above the group's median residual, then
+     re-solve with the remaining rays. This throws out a station that's
+     clearly mis-aimed or mis-calibrated without the user needing to
+     manually flag anything.
+  4. Result: a reconstructed height-over-time curve; take its max as the
+     launch's best altitude estimate. Store per-station individual
+     max-angle-based estimates alongside it for comparison/debugging and
+     the "how close was I" feature.
+
+Fallback for exactly 1 station (no triangulation possible): use the classic
+single-observer formula, height = distance x tan(peak elevation angle),
+clearly labeled as a lower-confidence estimate since it can't correct for
+sideways drift.
+
+
+VERIFICATION IDEAS (FOR WHEN BUILDING STARTS)
+================================================
+- Local dual-device test: two phones + the iPad in the same room, walk one
+  "station" phone to a known measured distance, tilt it to a few known
+  angles (checked with a real protractor/angle-finder app) and confirm the
+  displayed elevation matches within a couple degrees, and that the live
+  readout doesn't visibly jitter.
+- Synthetic trajectory test: feed the triangulation logic a hand-built set
+  of station rays for a known synthetic 3D path (straight vertical launch
+  to a known height, and a second case with lateral drift) and confirm it
+  recovers the known peak height, and that outlier rejection correctly
+  discards a deliberately bad injected ray.
+- Field dry run before the actual event: at least one full rehearsal with
+  the real number of phones intended for launch day (even tossing a ball as
+  a stand-in for the rocket), confirming the whole flow end-to-end - join
+  via QR, calibrate, countdown, landed, auto-upload, result - with real cell
+  connectivity at the actual site. That connectivity assumption is the
+  biggest real-world risk in this design, worth testing early.
+
+
+BRAINSTORMED EXTRAS (MENU ONLY - NOT PART OF CORE BUILD)
+===========================================================
+
+Launch Control (iPad) ideas:
+  - Pre-flight safety checklist (range clear, eye protection, launch angle)
+    gating the "arm" button
+  - Audible countdown/siren over the iPad speaker for the whole group to
+    hear
+  - Session leaderboard across teams/rocket designs (highest altitude, most
+    consistent)
+  - Per-rocket build notes (water volume, pressure, fin design) logged
+    alongside results
+  - Weather logging (wind, temp) - manual entry or pulled from an API, to
+    correlate with results
+  - CSV/PDF export of the session's results to share with the group
+    afterward
+  - Animated replay of the reconstructed 3D flight path after each launch
+    (fun to watch)
+  - Photo/video attached to each launch's log entry
+  - "Practice mode" for kids to test their calibration before the real
+    event begins
+
+Clinometer (iPhone) ideas:
+  - Live rate-of-climb/speed estimate shown just for fun (not part of the
+    official number)
+  - On-screen level/roll indicator so a tilted phone doesn't quietly bias
+    its azimuth reading
+  - Optional short video recording during the flight, auto-attached to that
+    launch's log
+  - Multi-role toggle - a spare phone could double as a spotter/
+    videographer instead of a clinometer, once enough stations exist for
+    good triangulation
