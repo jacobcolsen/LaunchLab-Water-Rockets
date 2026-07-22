@@ -1,0 +1,215 @@
+WATER ROCKET LAUNCH LAB - PHASED MVP BUILD PLAN
+Companion to: brainstorm-plan.txt
+================================================================
+
+HOW TO USE THIS DOCUMENT
+-------------------------
+Each phase below is meant to be built, then tested/verified on its own,
+before moving to the next. Phases are ordered so complexity is added one
+layer at a time: data model -> plain HTTP -> real-time push -> real sensors
+-> single-station math -> multi-station math -> full field polish. You
+should be able to stop after any phase with something that visibly works,
+even if it's not the full system yet.
+
+Stack assumed throughout (see brainstorm-plan.txt for the full rationale):
+Django + Django REST Framework + Django Channels (WebSockets via Redis) +
+PostgreSQL, deployed somewhere reachable over the internet on launch day.
+
+
+PHASE 0 - PROJECT SCAFFOLDING
+===============================
+Build:
+  - New Django project + app (e.g. `launchlab`), PostgreSQL configured
+    locally (Docker Compose is an easy way to run Postgres + Redis together
+    for local dev without installing them natively).
+  - A trivial `/health` endpoint that confirms the app is up and can reach
+    the database.
+  - Basic settings split for local dev vs. eventual deployment (env vars for
+    DB connection, secret key, allowed hosts).
+
+Test:
+  - `manage.py runserver` starts cleanly.
+  - Hitting `/health` returns OK and reflects a real DB round-trip (e.g.
+    counts rows in an empty table), proving Postgres is actually wired up,
+    not just that Django boots.
+
+
+PHASE 1 - CORE DATA MODELS + ADMIN
+=====================================
+Build:
+  - Django models: Session, Launch (belongs to a Session, auto-incrementing
+    launch number), Station (a calibrated observer for a given Session:
+    distance, bearing, ready flag, device token), Sample (raw
+    angle-vs-time buffer for one Station's one Launch - a JSONField of
+    {t, elevation, azimuth} is fine to start), Result (computed altitude +
+    per-station breakdown for a Launch).
+  - Register everything in Django admin - no custom UI yet.
+
+Test:
+  - Run migrations clean.
+  - Using only Django admin: create a Session, add a couple Stations to it
+    with made-up distance/bearing values, create a Launch, and manually
+    paste a small fake Sample array. Confirm all relationships show up
+    correctly in the admin. This proves the data model shape is right
+    before any real device touches it.
+
+
+PHASE 2 - SESSION & STATION REGISTRATION (PLAIN HTTP, NO REALTIME YET)
+=========================================================================
+Build:
+  - DRF endpoints: create a session, list a session's stations, register a
+    new station into a session (accepts distance + bearing, returns a
+    device token to store client-side for future requests).
+  - A bare-bones "/control" template: shows the current session's station
+    roster (list of stations + their ready/calibrated state), refreshed by
+    a manual reload or a simple periodic poll (no WebSockets yet).
+  - A bare-bones "/station" template: a calibration form (distance number
+    input, a "Set Bearing" button - for now bearing can just be a number
+    you type in manually, real compass sensor comes in Phase 4) that POSTs
+    to the registration endpoint.
+
+Test:
+  - Two-device test on the same Wi-Fi: open "/control" on one device,
+    "/station?session=..." on another, register the station with a made-up
+    distance/bearing, refresh "/control" and confirm the new station shows
+    up with the right values. This is the first real cross-device test.
+
+
+PHASE 3 - REAL-TIME LAYER (DJANGO CHANNELS + REDIS)
+======================================================
+Build:
+  - Add Channels + a Redis-backed channel layer. One channel group per
+    Session.
+  - Roster updates on "/control" now arrive live (no refresh) when a new
+    station registers or changes ready state.
+  - A "Start Countdown" / "Launched" / "Landed" control on "/control" that
+    broadcasts a status change to every connected station instantly. On the
+    station side, for now, just flip a big banner/color when the status
+    changes (e.g., "WAITING" -> "TRACKING" -> "DONE") - no sensor logic yet.
+
+Test:
+  - With 2+ devices connected to a session, confirm tapping "Launched" on
+    the iPad flips every connected phone's banner within roughly a second,
+    with no manual refresh anywhere. Also test the annoying edge case now,
+    while it's simple: refresh a station mid-session and confirm it
+    reconnects to the group and picks up the current status correctly.
+
+
+PHASE 4 - CLINOMETER SENSOR CAPTURE (SINGLE PHONE, NO ALTITUDE MATH YET)
+===========================================================================
+Build:
+  - Real sensor logic on "/station": request DeviceOrientationEvent
+    permission (iOS tap-triggered prompt), live camera preview with a
+    center crosshair overlay, a big smoothed live angle readout (apply a
+    jitter-reduction filter - one-euro filter or adaptive EMA - to the
+    DISPLAYED number only).
+  - On receiving "launched" from Phase 3's status push, start buffering raw
+    {t, elevation, azimuth} samples locally at ~20-30Hz. On "landed", stop
+    and POST the full buffer to the Sample endpoint.
+  - Replace the manual bearing-number-entry from Phase 2 with the real
+    "point at the pad and tap Set Bearing" compass-based calibration flow.
+
+Test:
+  - Single-phone bench test: tilt the phone to a few known angles (checked
+    against a real protractor/angle-finder app) and confirm the on-screen
+    number is both accurate (within a couple degrees) and visually stable/
+    non-jumpy while held steady.
+  - Full-cycle test: trigger a fake "launched"/"landed" cycle from
+    "/control", confirm the phone buffers samples during that window and
+    that the uploaded buffer shows up correctly in Django admin afterward
+    (spot-check a few timestamps/values by hand).
+
+
+PHASE 5 - SINGLE-STATION ALTITUDE (FIRST FULLY WORKING END-TO-END PATH)
+==========================================================================
+Build:
+  - Server-side computation: once exactly one station has uploaded a
+    Sample for a Launch, compute height = distance x tan(peak elevation
+    angle) and save it as that Launch's Result.
+  - Push/display the Result on both "/control" and "/station" once ready.
+
+Test:
+  - Real backyard test with one phone: hold or toss something to a roughly
+    known height at a measured distance (e.g., raise a marked pole to a
+    taped height, or use a known object thrown to approximate height),
+    run it through the full flow (join -> calibrate -> countdown ->
+    "landed"), and confirm the computed altitude is in a sane ballpark.
+  - This is the first checkpoint where the whole system works end-to-end
+    for the simplest case - a good milestone to pause and sanity-check
+    before adding multi-station complexity.
+
+
+PHASE 6 - MULTI-STATION TRIANGULATION + OUTLIER REJECTION
+=============================================================
+Build:
+  - Extend the Result computation for 2+ stations on the same Launch: time
+    -align/resample each station's buffer onto a common grid, solve the
+    least-squares closest-point-to-multiple-rays position at each timestamp,
+    reconstruct a height-over-time curve, take its max.
+  - Outlier rejection: compute each station's residual against the solved
+    point per timestamp, drop stations whose residual is far above the
+    group's median, and re-solve with the rest.
+  - Keep the Phase 5 single-station formula as the fallback when only one
+    station is present for a given Launch.
+
+Test:
+  - Write this as an actual unit test first, before any real rocket:
+    hand-construct station positions + a synthetic 3D path (a straight
+    vertical case, and a second case with lateral drift), confirm the
+    recovered peak height matches the known input, and confirm a
+    deliberately-injected bad ray gets correctly rejected.
+  - Then a real field test with 2-3 phones on an actual rocket (or a
+    thrown/raised object at a known height as a sanity check first),
+    comparing the combined estimate against each individual station's own
+    number to make sure the fusion is behaving sensibly.
+
+
+PHASE 7 - LAUNCH CONTROL UX + SESSION FLOW POLISH
+====================================================
+Build:
+  - Full 5-4-3-2-1 visual/audible countdown driving the "launched" event,
+    a "Landed" button plus an automatic safety timeout (e.g. 30s) in case
+    no one taps it, auto-incrementing launch numbers within a session, and
+    a simple results history list per session (so you can flip back through
+    the day's launches).
+  - QR code on "/control" that opens a phone straight into "/station" for
+    the current session (removes any manual URL typing for a 12-year-old).
+
+Test:
+  - Run a full mock session with 3+ devices end-to-end with no manual page
+    refresh anywhere: create a session, phones join via QR and calibrate,
+    run a countdown, simulate a flight, land it, see a result, then start a
+    second launch in the same session and confirm the history list grows
+    correctly.
+
+
+PHASE 8 - FIELD REHEARSAL / HOSTING HARDENING
+================================================
+Build:
+  - Deploy to the real hosting target (VPS or a platform like
+    Railway/Render/Fly.io) with real production Postgres + Redis, not just
+    local dev services.
+  - Confirm behavior over real cellular data rather than local Wi-Fi, since
+    that's the single biggest real-world risk in this design.
+  - Confirm the local-buffer-then-upload design actually pays off: put a
+    phone in airplane mode briefly mid-"flight," bring it back, and confirm
+    its buffer still uploads successfully once reconnected.
+
+Test:
+  - A full dress rehearsal at (or near) the actual launch site, with the
+    real number of phones you intend to use, using a stand-in object for
+    the rocket if you don't want to burn a real one. This is the go/no-go
+    check before the actual event.
+
+
+SUGGESTED PACING
+------------------
+Phases 0-3 are pure plumbing (no sensors, no rocket science) and can
+reasonably be built and tested indoors in one sitting. Phase 4 is where
+device-specific quirks (iOS permission prompts, compass behavior, camera
+preview) tend to eat the most time, so don't rush it. Phases 5 and 6 are
+the "does the math actually work" phases - lean on the synthetic unit test
+in Phase 6 rather than only trusting real-rocket tests, since a bad launch
+day test is expensive (you don't get a redo on a broken rocket). Phase 8
+should happen with enough lead time before the actual event to fix
+whatever the real cell network at the site does to you.
