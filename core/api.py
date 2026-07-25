@@ -5,7 +5,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Launch, Session, Station
+from .models import Launch, Sample, Session, Station
 from .realtime import broadcast_session_state
 from .serializers import (
     LaunchSerializer,
@@ -75,3 +75,30 @@ class LaunchMarkLandedView(APIView):
         launch.save()
         broadcast_session_state(launch.session_id)
         return Response(LaunchSerializer(launch).data, status=status.HTTP_200_OK)
+
+
+class SampleUploadView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        device_token = request.data.get("device_token")
+        launch_id = request.data.get("launch")
+        data = request.data.get("data")
+
+        if not device_token or not launch_id or data is None:
+            return Response(
+                {"detail": "device_token, launch, and data are all required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        station = get_object_or_404(Station, device_token=device_token)
+        launch = get_object_or_404(Launch, pk=launch_id)
+
+        sample, created = Sample.objects.update_or_create(
+            launch=launch, station=station, defaults={"data": data}
+        )
+        return Response(
+            {"id": sample.id, "count": len(data)},
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )

@@ -5,62 +5,283 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Clinometer Station</title>
   <style>
-    body { font-family: sans-serif; max-width: 480px; margin: 2rem auto; padding: 0 1rem; }
-    label { display: block; margin-top: 1rem; font-weight: bold; }
-    input { width: 100%; font-size: 1.2rem; padding: 0.5rem; margin-top: 0.25rem; box-sizing: border-box; }
-    button { margin-top: 1.5rem; font-size: 1.2rem; padding: 0.75rem 1rem; width: 100%; }
-    .ready-banner { background: #e6f4ea; color: #1a7f37; padding: 1rem; border-radius: 8px; font-size: 1.3rem; text-align: center; }
-    .error { color: #b42318; }
-    #flight-banner {
-      margin-top: 1.5rem; padding: 1.5rem; border-radius: 8px; text-align: center;
-      font-size: 2rem; font-weight: bold; letter-spacing: 0.05em;
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%; font-family: sans-serif;
+      background: #111; color: #fff; overflow: hidden;
     }
-    .banner-waiting { background: #eef1f4; color: #555; }
+    .error { color: #ffb4a9; }
+
+    /* --- Permission gate --- */
+    #permission-gate {
+      height: 100%; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; padding: 2rem; text-align: center;
+    }
+    #permission-gate button {
+      font-size: 1.4rem; padding: 1rem 1.5rem; border-radius: 10px; border: none;
+      background: #2563eb; color: #fff; margin-top: 1.5rem;
+    }
+
+    /* --- Scope view (camera + overlays) --- */
+    #scope-view { position: relative; height: 100%; width: 100%; display: none; }
+    #camera-feed {
+      position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0;
+    }
+    #crosshair {
+      position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 60px; height: 60px; z-index: 5; pointer-events: none;
+    }
+    #crosshair::before, #crosshair::after {
+      content: ""; position: absolute; background: rgba(255,255,255,0.85);
+    }
+    #crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
+    #crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
+
+    #elevation-readout {
+      position: fixed; top: 1.5rem; left: 50%; transform: translateX(-50%); z-index: 10;
+      background: rgba(0,0,0,0.55); padding: 0.5rem 1.25rem; border-radius: 999px;
+      font-size: 2rem; font-weight: bold;
+    }
+    #current-heading {
+      position: fixed; top: 5rem; left: 50%; transform: translateX(-50%); z-index: 10;
+      background: rgba(0,0,0,0.4); padding: 0.25rem 0.75rem; border-radius: 999px;
+      font-size: 0.95rem; color: #ddd;
+    }
+
+    #landscape-warning {
+      position: fixed; inset: 0; z-index: 30; display: none; align-items: center;
+      justify-content: center; background: rgba(0,0,0,0.9); font-size: 1.5rem;
+      text-align: center; padding: 2rem;
+    }
+
+    .overlay-panel {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+      background: rgba(0,0,0,0.7); padding: 1rem 1.25rem 1.5rem;
+    }
+    .overlay-panel label { display: block; margin-top: 0.75rem; font-weight: bold; }
+    .overlay-panel input {
+      width: 100%; font-size: 1.1rem; padding: 0.5rem; margin-top: 0.25rem;
+      border-radius: 6px; border: none;
+    }
+    .overlay-panel button {
+      margin-top: 1rem; font-size: 1.1rem; padding: 0.75rem 1rem; width: 100%;
+      border-radius: 8px; border: none;
+    }
+    #set-bearing-btn { background: #6b7280; color: #fff; }
+    #register-btn { background: #2563eb; color: #fff; }
+    #register-btn:disabled { background: #374151; color: #9ca3af; }
+    #bearing-captured { margin-top: 0.5rem; color: #9ae6b4; font-size: 0.95rem; }
+
+    #flight-banner {
+      padding: 1rem; border-radius: 8px; text-align: center;
+      font-size: 1.7rem; font-weight: bold; letter-spacing: 0.05em;
+    }
+    .banner-waiting { background: #eef1f4; color: #333; }
     .banner-ready { background: #fff3cd; color: #7a5b00; }
     .banner-tracking { background: #d8f2df; color: #17632f; }
     .banner-done { background: #dbe7ff; color: #1d3a8a; }
+    #upload-status { margin-top: 0.75rem; text-align: center; font-size: 1rem; }
+    #upload-status button {
+      margin-top: 0.5rem; font-size: 1rem; padding: 0.5rem 1rem;
+      border-radius: 8px; border: none; background: #b91c1c; color: #fff;
+    }
+    #station-summary { text-align: center; color: #ccc; font-size: 0.9rem; margin-bottom: 0.5rem; }
   </style>
 </head>
 <body>
   {% if not session_id %}
-    <p class="error">No session specified. Ask the launch control operator for the join link.</p>
+    <p class="error" style="padding: 2rem;">No session specified. Ask the launch control operator for the join link.</p>
   {% else %}
-    <div id="form-view">
-      <h1>Join Station</h1>
-      <form id="calibration-form">
-        <label for="label">Your name / station label</label>
-        <input type="text" id="label" required>
-
-        <label for="distance_ft">Distance to pad (feet)</label>
-        <input type="number" id="distance_ft" step="any" required>
-
-        <label for="bearing_degrees">Bearing to pad (degrees, 0-360)</label>
-        <input type="number" id="bearing_degrees" step="any" min="0" max="360" required>
-
-        <button type="submit">Register Station</button>
-      </form>
+    <div id="permission-gate">
+      <h1>Clinometer Station</h1>
+      <p>This uses your camera (to aim) and motion sensors (to measure angle).</p>
+      <button id="enable-btn">Enable Camera &amp; Sensors</button>
+      <p id="permission-error" class="error" style="display:none;"></p>
     </div>
-    <div id="ready-view" style="display:none;">
-      <div class="ready-banner">
-        ✅ Registered — <span id="ready-label"></span><br>
-        <span id="ready-details"></span>
+
+    <div id="scope-view">
+      <video id="camera-feed" autoplay playsinline muted></video>
+      <div id="crosshair"></div>
+      <div id="elevation-readout">--°</div>
+      <div id="current-heading">heading: --°</div>
+      <div id="landscape-warning">Please rotate your phone to portrait.</div>
+
+      <div id="calibration-overlay" class="overlay-panel">
+        <form id="calibration-form">
+          <label for="label">Your name / station label</label>
+          <input type="text" id="label" required>
+
+          <label for="distance_ft">Distance to pad (feet)</label>
+          <input type="number" id="distance_ft" step="any" required>
+
+          <button type="button" id="set-bearing-btn">Point at the pad, then tap to Set Bearing</button>
+          <div id="bearing-captured"></div>
+          <input type="hidden" id="bearing_degrees">
+
+          <button type="submit" id="register-btn" disabled>Register Station</button>
+        </form>
       </div>
-      <div id="flight-banner" class="banner-waiting">WAITING</div>
+
+      <div id="flight-overlay" class="overlay-panel" style="display:none;">
+        <div id="station-summary"></div>
+        <div id="flight-banner" class="banner-waiting">WAITING</div>
+        <div id="upload-status"></div>
+      </div>
     </div>
-  {% endif %}
 
   <script>
     const sessionId = {{ session_id|default:"null" }};
     const storageKey = `station-${sessionId}`;
 
+    // --- One Euro Filter (Casiez et al.) - smooths the DISPLAYED angle only ---
+    class OneEuroFilter {
+      constructor(minCutoff = 1.0, beta = 0.02, dCutoff = 1.0) {
+        this.minCutoff = minCutoff;
+        this.beta = beta;
+        this.dCutoff = dCutoff;
+        this.xPrev = null;
+        this.dxPrev = 0;
+        this.tPrev = null;
+      }
+      alpha(cutoff, dt) {
+        const tau = 1 / (2 * Math.PI * cutoff);
+        return 1 / (1 + tau / dt);
+      }
+      filter(x, t) {
+        if (this.tPrev === null) {
+          this.xPrev = x; this.dxPrev = 0; this.tPrev = t;
+          return x;
+        }
+        const dt = Math.max((t - this.tPrev) / 1000, 0.001);
+        const dx = (x - this.xPrev) / dt;
+        const aD = this.alpha(this.dCutoff, dt);
+        const dxHat = aD * dx + (1 - aD) * this.dxPrev;
+        const cutoff = this.minCutoff + this.beta * Math.abs(dxHat);
+        const a = this.alpha(cutoff, dt);
+        const xHat = a * x + (1 - a) * this.xPrev;
+        this.xPrev = xHat; this.dxPrev = dxHat; this.tPrev = t;
+        return xHat;
+      }
+    }
+
+    const elevationFilter = new OneEuroFilter(1.0, 0.02, 1.0);
+    let latestAzimuth = null;
+    let recording = false;
+    let flightBuffer = [];
+    let currentLaunchId = null;
+    let previousStatus = null;
+
+    function handleOrientation(event) {
+      if (event.beta === null || event.beta === undefined) return;
+      const elevationRaw = event.beta - 90;
+      const azimuth = (event.webkitCompassHeading !== undefined && event.webkitCompassHeading !== null)
+        ? event.webkitCompassHeading
+        : (event.alpha !== null ? (360 - event.alpha) % 360 : null);
+
+      latestAzimuth = azimuth;
+
+      const smoothed = elevationFilter.filter(elevationRaw, performance.now());
+      document.getElementById('elevation-readout').textContent = `${smoothed.toFixed(1)}°`;
+      document.getElementById('current-heading').textContent =
+        azimuth !== null ? `heading: ${azimuth.toFixed(0)}°` : 'heading: --°';
+
+      if (recording) {
+        flightBuffer.push({ t: Date.now(), elevation: elevationRaw, azimuth: azimuth });
+      }
+    }
+
+    function updateOrientationWarning() {
+      const landscape = window.matchMedia('(orientation: landscape)').matches;
+      document.getElementById('landscape-warning').style.display = landscape ? 'flex' : 'none';
+    }
+    window.matchMedia('(orientation: landscape)').addEventListener('change', updateOrientationWarning);
+    window.addEventListener('resize', updateOrientationWarning);
+
+    document.getElementById('enable-btn').addEventListener('click', async () => {
+      const errorEl = document.getElementById('permission-error');
+      errorEl.style.display = 'none';
+      try {
+        if (typeof DeviceOrientationEvent !== 'undefined' &&
+            typeof DeviceOrientationEvent.requestPermission === 'function') {
+          const motionPerm = await DeviceOrientationEvent.requestPermission();
+          if (motionPerm !== 'granted') {
+            throw new Error('Motion sensor permission was denied.');
+          }
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+        });
+        document.getElementById('camera-feed').srcObject = stream;
+        window.addEventListener('deviceorientation', handleOrientation);
+        updateOrientationWarning();
+
+        document.getElementById('permission-gate').style.display = 'none';
+        document.getElementById('scope-view').style.display = 'block';
+
+        const cached = localStorage.getItem(storageKey);
+        if (cached) {
+          showReady(JSON.parse(cached));
+        }
+      } catch (err) {
+        errorEl.textContent = `Could not enable camera/sensors: ${err.message} — tap to try again.`;
+        errorEl.style.display = 'block';
+      }
+    });
+
+    document.getElementById('set-bearing-btn').addEventListener('click', () => {
+      if (latestAzimuth === null) return;
+      document.getElementById('bearing_degrees').value = latestAzimuth.toFixed(1);
+      document.getElementById('bearing-captured').textContent = `Bearing set: ${latestAzimuth.toFixed(1)}°`;
+      document.getElementById('register-btn').disabled = false;
+    });
+
+    document.getElementById('calibration-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const payload = {
+        label: document.getElementById('label').value,
+        distance_ft: parseFloat(document.getElementById('distance_ft').value),
+        bearing_degrees: parseFloat(document.getElementById('bearing_degrees').value),
+      };
+      const res = await fetch(`/api/sessions/${sessionId}/stations/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      localStorage.setItem(storageKey, JSON.stringify(data));
+      showReady(data);
+    });
+
     function showReady(info) {
-      document.getElementById('form-view').style.display = 'none';
-      const readyView = document.getElementById('ready-view');
-      readyView.style.display = 'block';
-      document.getElementById('ready-label').textContent = info.label;
-      document.getElementById('ready-details').textContent =
-        `${info.distance_ft} ft, bearing ${info.bearing_degrees}°`;
+      document.getElementById('calibration-overlay').style.display = 'none';
+      const flightOverlay = document.getElementById('flight-overlay');
+      flightOverlay.style.display = 'block';
+      document.getElementById('station-summary').textContent =
+        `${info.label} — ${info.distance_ft} ft, bearing ${info.bearing_degrees}°`;
       connectStatusSocket();
+    }
+
+    async function uploadSamples() {
+      const statusEl = document.getElementById('upload-status');
+      const info = JSON.parse(localStorage.getItem(storageKey));
+      statusEl.textContent = 'Uploading…';
+      try {
+        const res = await fetch('/api/samples/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_token: info.device_token,
+            launch: currentLaunchId,
+            data: flightBuffer,
+          }),
+        });
+        if (!res.ok) throw new Error(`server returned ${res.status}`);
+        const result = await res.json();
+        statusEl.textContent = `Uploaded ${result.count} samples ✅`;
+      } catch (err) {
+        statusEl.innerHTML = 'Upload failed. <button id="retry-upload-btn">Retry Upload</button>';
+        document.getElementById('retry-upload-btn').addEventListener('click', uploadSamples);
+      }
     }
 
     function connectStatusSocket() {
@@ -68,42 +289,33 @@
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws/sessions/${sessionId}/`);
       ws.onmessage = (event) => {
         const state = JSON.parse(event.data);
+        const launch = state.launch;
+        const launchStatus = launch ? launch.status : null;
+        currentLaunchId = launch ? launch.id : null;
+
         const banner = document.getElementById('flight-banner');
-        const status = state.launch ? state.launch.status : null;
         const display = {
           null: ['WAITING', 'banner-waiting'],
           pending: ['READY', 'banner-ready'],
           launched: ['TRACKING', 'banner-tracking'],
           landed: ['DONE', 'banner-done'],
-        }[status];
+        }[launchStatus];
         banner.textContent = display[0];
         banner.className = display[1];
+
+        if (launchStatus === 'launched' && previousStatus !== 'launched') {
+          flightBuffer = [];
+          recording = true;
+          document.getElementById('upload-status').textContent = '';
+        }
+        if (launchStatus === 'landed' && previousStatus !== 'landed') {
+          recording = false;
+          uploadSamples();
+        }
+        previousStatus = launchStatus;
       };
     }
-
-    if (sessionId) {
-      const cached = localStorage.getItem(storageKey);
-      if (cached) {
-        showReady(JSON.parse(cached));
-      } else {
-        document.getElementById('calibration-form').addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const payload = {
-            label: document.getElementById('label').value,
-            distance_ft: parseFloat(document.getElementById('distance_ft').value),
-            bearing_degrees: parseFloat(document.getElementById('bearing_degrees').value),
-          };
-          const res = await fetch(`/api/sessions/${sessionId}/stations/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-          const data = await res.json();
-          localStorage.setItem(storageKey, JSON.stringify(data));
-          showReady(data);
-        });
-      }
-    }
   </script>
+  {% endif %}
 </body>
 </html>

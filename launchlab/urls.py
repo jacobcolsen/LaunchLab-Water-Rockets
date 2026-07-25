@@ -21,6 +21,7 @@ from core.api import (
     LaunchCreateView,
     LaunchMarkLandedView,
     LaunchMarkLaunchedView,
+    SampleUploadView,
     SessionCreateView,
     StationListCreateView,
 )
@@ -52,4 +53,5 @@ urlpatterns = [
         LaunchMarkLandedView.as_view(),
         name='api-launch-landed',
     ),
+    path('api/samples/', SampleUploadView.as_view(), name='api-sample-upload'),
 ]
