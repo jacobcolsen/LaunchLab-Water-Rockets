@@ -9,6 +9,7 @@ from .altitude import compute_result_for_launch
 from .models import Launch, Sample, Session, Station
 from .realtime import broadcast_session_state
 from .serializers import (
+    LaunchHistorySerializer,
     LaunchSerializer,
     SessionSerializer,
     StationCreateResponseSerializer,
@@ -41,10 +42,21 @@ class StationListCreateView(generics.ListCreateAPIView):
         broadcast_session_state(session.id)
 
 
-class LaunchCreateView(generics.CreateAPIView):
-    serializer_class = LaunchSerializer
+class LaunchListCreateView(generics.ListCreateAPIView):
     authentication_classes = []
     permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return (
+            Launch.objects.filter(session_id=self.kwargs["session_id"])
+            .select_related("result")
+            .order_by("number")
+        )
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return LaunchSerializer
+        return LaunchHistorySerializer
 
     def perform_create(self, serializer):
         session = get_object_or_404(Session, pk=self.kwargs["session_id"])

@@ -7,6 +7,7 @@
   <style>
     body { font-family: sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
     h1 { margin-bottom: 0.25rem; }
+    h2 { margin-top: 2rem; }
     .hint { color: #555; margin-bottom: 1.5rem; }
     table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
     th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; }
@@ -14,10 +15,16 @@
     .not-ready { color: #b54708; font-weight: bold; }
     input, button { font-size: 1rem; padding: 0.5rem; }
     #join-url { font-weight: bold; word-break: break-all; }
+    #qr-code { display: block; margin-top: 0.75rem; width: 160px; height: 160px; border: 1px solid #ddd; border-radius: 8px; }
     .launch-panel { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
     .launch-panel button { margin-right: 0.5rem; }
     #conn-status { font-size: 0.85rem; color: #888; }
     #launch-result { margin-top: 0.75rem; font-size: 1.2rem; font-weight: bold; color: #1a7f37; }
+    #auto-land-ticker { font-size: 0.85rem; color: #888; margin-top: 0.5rem; }
+    #countdown-display {
+      display: none; text-align: center; font-size: 4rem; font-weight: bold;
+      padding: 1rem; color: #b54708;
+    }
   </style>
 </head>
 <body>
@@ -33,12 +40,15 @@
     <p class="hint">
       Stations should open:
       <span id="join-url"></span>
+      <img id="qr-code" alt="Scan to join">
     </p>
     <p id="conn-status">connecting…</p>
 
     <div class="launch-panel">
+      <div id="countdown-display"></div>
       <div id="launch-status">No launch yet.</div>
       <div id="launch-actions"></div>
+      <div id="auto-land-ticker"></div>
       <div id="launch-result"></div>
     </div>
 
@@ -48,6 +58,16 @@
       </thead>
       <tbody id="roster-body">
         <tr><td colspan="4">Waiting for data…</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Launch History</h2>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Status</th><th>Best Altitude</th></tr>
+      </thead>
+      <tbody id="history-body">
+        <tr><td colspan="3">Loading…</td></tr>
       </tbody>
     </table>
   {% endif %}
@@ -70,6 +90,65 @@
     } else {
       document.getElementById('join-url').textContent =
         `${window.location.origin}/station?session=${sessionId}`;
+      document.getElementById('qr-code').src = `/sessions/${sessionId}/qr.png`;
+
+      let isCountingDown = false;
+      let lastRenderedLaunchStatus = null;
+      let autoLandTimer = null;
+      let autoLandCountdownInterval = null;
+      let audioCtx = null;
+
+      function beep(freq, durationMs) {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.frequency.value = freq;
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        osc.start();
+        osc.stop(audioCtx.currentTime + durationMs / 1000);
+      }
+
+      async function runCountdown(launchId) {
+        isCountingDown = true;
+        clearAutoLandTimer();
+        const countdownEl = document.getElementById('countdown-display');
+        document.getElementById('launch-actions').innerHTML = '';
+        countdownEl.style.display = 'block';
+        for (let n = 5; n >= 1; n--) {
+          countdownEl.textContent = n;
+          beep(440, 150);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        countdownEl.textContent = 'LIFTOFF!';
+        beep(880, 400);
+        await fetch(`/api/launches/${launchId}/launched/`, { method: 'POST' });
+        await new Promise((r) => setTimeout(r, 800));
+        countdownEl.style.display = 'none';
+        isCountingDown = false;
+      }
+
+      function clearAutoLandTimer() {
+        if (autoLandTimer) { clearTimeout(autoLandTimer); autoLandTimer = null; }
+        if (autoLandCountdownInterval) { clearInterval(autoLandCountdownInterval); autoLandCountdownInterval = null; }
+        document.getElementById('auto-land-ticker').textContent = '';
+      }
+
+      function startAutoLandTimer(launchId) {
+        clearAutoLandTimer();
+        let secondsLeft = 30;
+        const tickerEl = document.getElementById('auto-land-ticker');
+        tickerEl.textContent = `(auto-lands in ${secondsLeft}s if not marked)`;
+        autoLandCountdownInterval = setInterval(() => {
+          secondsLeft -= 1;
+          tickerEl.textContent = `(auto-lands in ${secondsLeft}s if not marked)`;
+          if (secondsLeft <= 0) clearInterval(autoLandCountdownInterval);
+        }, 1000);
+        autoLandTimer = setTimeout(() => {
+          fetch(`/api/launches/${launchId}/landed/`, { method: 'POST' });
+        }, 30000);
+      }
 
       function renderRoster(stations) {
         const body = document.getElementById('roster-body');
@@ -95,8 +174,11 @@
       }
 
       function renderLaunch(launch) {
+        if (isCountingDown) return;
+
         const statusEl = document.getElementById('launch-status');
         const actionsEl = document.getElementById('launch-actions');
+        const launchStatus = launch ? launch.status : null;
 
         if (!launch) {
           statusEl.textContent = 'No launch yet.';
@@ -104,13 +186,21 @@
         } else {
           statusEl.textContent = `Launch #${launch.number} — status: ${launch.status}`;
           if (launch.status === 'pending') {
-            actionsEl.innerHTML = '<button id="btn-mark-launched">Mark Launched</button>';
+            actionsEl.innerHTML = '<button id="btn-begin-countdown">Begin Countdown</button>';
           } else if (launch.status === 'launched') {
             actionsEl.innerHTML = '<button id="btn-mark-landed">Mark Landed</button>';
           } else {
             actionsEl.innerHTML = '<button id="btn-new-launch">Start New Launch</button>';
           }
         }
+
+        if (launchStatus === 'launched' && lastRenderedLaunchStatus !== 'launched') {
+          startAutoLandTimer(launch.id);
+        }
+        if (launchStatus !== 'launched') {
+          clearAutoLandTimer();
+        }
+        lastRenderedLaunchStatus = launchStatus;
 
         const newLaunchBtn = document.getElementById('btn-new-launch');
         if (newLaunchBtn) {
@@ -122,18 +212,34 @@
             })
           );
         }
-        const launchedBtn = document.getElementById('btn-mark-launched');
-        if (launchedBtn) {
-          launchedBtn.addEventListener('click', () =>
-            fetch(`/api/launches/${launch.id}/launched/`, { method: 'POST' })
-          );
+        const countdownBtn = document.getElementById('btn-begin-countdown');
+        if (countdownBtn) {
+          countdownBtn.addEventListener('click', () => runCountdown(launch.id));
         }
         const landedBtn = document.getElementById('btn-mark-landed');
         if (landedBtn) {
-          landedBtn.addEventListener('click', () =>
-            fetch(`/api/launches/${launch.id}/landed/`, { method: 'POST' })
-          );
+          landedBtn.addEventListener('click', () => {
+            clearAutoLandTimer();
+            fetch(`/api/launches/${launch.id}/landed/`, { method: 'POST' });
+          });
         }
+      }
+
+      async function fetchHistory() {
+        const res = await fetch(`/api/sessions/${sessionId}/launches/`);
+        const launches = await res.json();
+        const body = document.getElementById('history-body');
+        if (launches.length === 0) {
+          body.innerHTML = '<tr><td colspan="3">No launches yet.</td></tr>';
+          return;
+        }
+        body.innerHTML = launches.map((l) => `
+          <tr>
+            <td>#${l.number}</td>
+            <td>${l.status}</td>
+            <td>${l.result ? l.result.best_altitude_ft.toFixed(1) + ' ft' : '—'}</td>
+          </tr>
+        `).join('');
       }
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -146,6 +252,7 @@
         renderRoster(state.stations);
         renderLaunch(state.launch);
         renderResult(state.result);
+        fetchHistory();
       };
     }
   </script>

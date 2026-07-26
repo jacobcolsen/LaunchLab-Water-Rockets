@@ -18,7 +18,7 @@ from django.contrib import admin
 from django.urls import path
 
 from core.api import (
-    LaunchCreateView,
+    LaunchListCreateView,
     LaunchMarkLandedView,
     LaunchMarkLaunchedView,
     SampleUploadView,
@@ -26,13 +26,18 @@ from core.api import (
     StationListCreateView,
     StationRecalibrateView,
 )
-from core.views import control_view, health, station_view
+from core.views import control_view, health, station_qr_view, station_view
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health', health, name='health'),
     path('control', control_view, name='control'),
     path('station', station_view, name='station'),
+    path(
+        'sessions/<int:session_id>/qr.png',
+        station_qr_view,
+        name='station-qr',
+    ),
     path('api/sessions/', SessionCreateView.as_view(), name='api-session-create'),
     path(
         'api/sessions/<int:session_id>/stations/',
@@ -41,8 +46,8 @@ urlpatterns = [
     ),
     path(
         'api/sessions/<int:session_id>/launches/',
-        LaunchCreateView.as_view(),
-        name='api-launch-create',
+        LaunchListCreateView.as_view(),
+        name='api-launch-list-create',
     ),
     path(
         'api/launches/<int:launch_id>/launched/',

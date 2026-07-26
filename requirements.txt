@@ -7,3 +7,5 @@ channels_redis==4.3.0
 redis==5.2.1
 daphne==4.2.3
 numpy==2.5.1
+qrcode==8.2
+pillow==12.3.0
