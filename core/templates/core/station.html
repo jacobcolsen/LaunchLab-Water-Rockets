@@ -1,26 +1,26 @@
+{% load static %}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Clinometer Station</title>
+  <link rel="stylesheet" href="{% static 'core/theme.css' %}">
   <style>
     * { box-sizing: border-box; }
     html, body {
-      margin: 0; padding: 0; height: 100%; font-family: sans-serif;
-      background: #111; color: #fff; overflow: hidden;
+      margin: 0; padding: 0; height: 100%;
+      background: var(--bg); color: var(--text-primary); overflow: hidden;
     }
-    .error { color: #ffb4a9; }
+    .error { color: var(--accent-red); }
 
     /* --- Permission gate --- */
     #permission-gate {
       height: 100%; display: flex; flex-direction: column; align-items: center;
       justify-content: center; padding: 2rem; text-align: center;
     }
-    #permission-gate button {
-      font-size: 1.4rem; padding: 1rem 1.5rem; border-radius: 10px; border: none;
-      background: #2563eb; color: #fff; margin-top: 1.5rem;
-    }
+    #permission-gate h1 { font-size: 1.6rem; }
+    #permission-gate .btn { margin-top: 1.5rem; font-size: 1.2rem; padding: 1rem 1.75rem; }
 
     /* --- Scope view (camera + overlays) --- */
     #scope-view { position: relative; height: 100%; width: 100%; display: none; }
@@ -29,88 +29,72 @@
     }
     #crosshair {
       position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: 60px; height: 60px; z-index: 5; pointer-events: none;
+      width: 64px; height: 64px; z-index: 5; pointer-events: none;
     }
     #crosshair::before, #crosshair::after {
-      content: ""; position: absolute; background: rgba(255,255,255,0.85);
+      content: ""; position: absolute; background: var(--accent-cyan);
+      box-shadow: 0 0 6px var(--accent-cyan-glow);
     }
     #crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
     #crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
 
     #elevation-readout {
-      position: fixed; top: 1.5rem; left: 50%; transform: translateX(-50%); z-index: 10;
-      background: rgba(0,0,0,0.55); padding: 0.5rem 1.25rem; border-radius: 999px;
-      font-size: 2rem; font-weight: bold;
+      position: fixed; top: 1.25rem; left: 50%; transform: translateX(-50%); z-index: 10;
+      background: rgba(11,15,26,0.65); backdrop-filter: blur(4px);
+      padding: 0.4rem 1.25rem; border-radius: 999px; border: 1px solid var(--border);
+      font-size: 2rem; font-weight: 800; color: var(--accent-cyan);
+      text-shadow: 0 0 14px var(--accent-cyan-glow); font-variant-numeric: tabular-nums;
     }
     #current-heading {
-      position: fixed; top: 5rem; left: 50%; transform: translateX(-50%); z-index: 10;
-      background: rgba(0,0,0,0.4); padding: 0.25rem 0.75rem; border-radius: 999px;
-      font-size: 0.95rem; color: #ddd;
+      position: fixed; top: 4.5rem; left: 50%; transform: translateX(-50%); z-index: 10;
+      background: rgba(11,15,26,0.5); padding: 0.2rem 0.75rem; border-radius: 999px;
+      font-size: 0.85rem; color: var(--text-muted);
     }
 
     #landscape-warning {
       position: fixed; inset: 0; z-index: 30; display: none; align-items: center;
-      justify-content: center; background: rgba(0,0,0,0.9); font-size: 1.5rem;
+      justify-content: center; background: rgba(11,15,26,0.95); font-size: 1.5rem;
       text-align: center; padding: 2rem;
     }
 
     #camera-reconnect-banner {
-      position: fixed; top: 8.5rem; left: 50%; transform: translateX(-50%); z-index: 25;
-      display: none; background: rgba(185,28,28,0.9); color: #fff; padding: 0.5rem 1rem;
-      border-radius: 999px; font-size: 0.95rem; text-align: center;
+      position: fixed; top: 8rem; left: 50%; transform: translateX(-50%); z-index: 25;
+      display: none; background: var(--accent-red); color: #2a0a0a; padding: 0.5rem 1rem;
+      border-radius: 999px; font-size: 0.9rem; text-align: center; font-weight: 700;
     }
     #camera-reconnect-banner button {
-      margin-left: 0.5rem; background: #fff; color: #b91c1c; border: none; border-radius: 6px;
-      padding: 0.3rem 0.6rem; font-size: 0.9rem;
+      margin-left: 0.5rem; background: #fff; color: var(--accent-red); border: none;
+      border-radius: 6px; padding: 0.3rem 0.6rem; font-size: 0.85rem; font-weight: 700;
     }
 
-    #recalibrate-confirm {
-      position: fixed; inset: 0; z-index: 40; display: none; align-items: center;
-      justify-content: center; background: rgba(0,0,0,0.85); padding: 2rem; text-align: center;
+    /* --- Slim top status strip (replaces the old bulky bottom panel) --- */
+    #status-strip {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 15;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.6rem 0.85rem; background: rgba(11,15,26,0.6); backdrop-filter: blur(6px);
+      border-bottom: 1px solid var(--border);
     }
-    #recalibrate-confirm .confirm-box { max-width: 320px; }
-    #recalibrate-confirm p { font-size: 1.2rem; margin-bottom: 1.5rem; }
-    #recalibrate-confirm button {
-      font-size: 1.1rem; padding: 0.75rem 1rem; border-radius: 8px; border: none;
-      width: 100%; margin-top: 0.75rem;
-    }
-    #recalibrate-confirm-yes { background: #b91c1c; color: #fff; }
-    #recalibrate-confirm-cancel { background: #374151; color: #ddd; }
+    #status-strip .left { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+    #station-label { font-size: 0.85rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
     .overlay-panel {
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-      background: rgba(0,0,0,0.7); padding: 1rem 1.25rem 1.5rem;
+      background: rgba(11,15,26,0.85); backdrop-filter: blur(6px);
+      padding: 1rem 1.25rem 1.5rem; border-top: 1px solid var(--border);
     }
-    .overlay-panel label { display: block; margin-top: 0.75rem; font-weight: bold; }
-    .overlay-panel input {
-      width: 100%; font-size: 1.1rem; padding: 0.5rem; margin-top: 0.25rem;
-      border-radius: 6px; border: none;
-    }
-    .overlay-panel button {
-      margin-top: 1rem; font-size: 1.1rem; padding: 0.75rem 1rem; width: 100%;
-      border-radius: 8px; border: none;
-    }
-    #set-bearing-btn { background: #6b7280; color: #fff; }
-    #register-btn { background: #2563eb; color: #fff; }
-    #register-btn:disabled { background: #374151; color: #9ca3af; }
-    #bearing-captured { margin-top: 0.5rem; color: #9ae6b4; font-size: 0.95rem; }
+    .overlay-panel label { display: block; margin-top: 0.75rem; font-weight: 700; font-size: 0.9rem; color: var(--text-muted); }
+    .overlay-panel input { width: 100%; margin-top: 0.3rem; }
+    .overlay-panel .btn { margin-top: 1rem; width: 100%; }
+    #bearing-captured { margin-top: 0.5rem; color: var(--accent-green); font-size: 0.9rem; }
 
-    #flight-banner {
-      padding: 1rem; border-radius: 8px; text-align: center;
-      font-size: 1.7rem; font-weight: bold; letter-spacing: 0.05em;
+    /* --- Result card: only shown once there's something to show --- */
+    #result-card {
+      position: fixed; left: 0.75rem; right: 0.75rem; bottom: 0.75rem; z-index: 12;
+      display: none;
     }
-    .banner-waiting { background: #eef1f4; color: #333; }
-    .banner-ready { background: #fff3cd; color: #7a5b00; }
-    .banner-tracking { background: #d8f2df; color: #17632f; }
-    .banner-done { background: #dbe7ff; color: #1d3a8a; }
-    #upload-status { margin-top: 0.75rem; text-align: center; font-size: 1rem; }
-    #upload-status button {
-      margin-top: 0.5rem; font-size: 1rem; padding: 0.5rem 1rem;
-      border-radius: 8px; border: none; background: #b91c1c; color: #fff;
-    }
-    #station-summary { text-align: center; color: #ccc; font-size: 0.9rem; margin-bottom: 0.5rem; }
-    #altitude-result { margin-top: 0.75rem; text-align: center; font-size: 1.3rem; font-weight: bold; color: #9ae6b4; }
-    #recalibrate-btn { background: #374151; color: #ddd; font-size: 0.95rem; padding: 0.6rem; }
+    #upload-status { font-size: 0.95rem; }
+    #upload-status .btn { margin-top: 0.5rem; width: 100%; }
+    #altitude-result { margin-top: 0.5rem; }
   </style>
 </head>
 <body>
@@ -118,9 +102,9 @@
     <p class="error" style="padding: 2rem;">No session specified. Ask the launch control operator for the join link.</p>
   {% else %}
     <div id="permission-gate">
-      <h1>Clinometer Station</h1>
+      <h1>🛰️ Clinometer Station</h1>
       <p>This uses your camera (to aim) and motion sensors (to measure angle).</p>
-      <button id="enable-btn">Enable Camera &amp; Sensors</button>
+      <button id="enable-btn" class="btn btn-primary">Enable Camera &amp; Sensors</button>
       <p id="permission-error" class="error" style="display:none;"></p>
     </div>
 
@@ -132,11 +116,21 @@
       <div id="landscape-warning">Please rotate your phone to portrait.</div>
       <div id="camera-reconnect-banner"></div>
 
-      <div id="recalibrate-confirm">
-        <div class="confirm-box">
+      <div id="status-strip" style="display:none;">
+        <div class="left">
+          <span id="station-label"></span>
+        </div>
+        <div style="display:flex; align-items:center; gap:0.5rem;">
+          <span id="flight-banner" class="badge badge-muted">WAITING</span>
+          <button type="button" id="recalibrate-btn" class="btn-icon" title="Recalibrate">⚙️</button>
+        </div>
+      </div>
+
+      <div id="recalibrate-confirm" class="confirm-overlay">
+        <div class="confirm-box card">
           <p>Recalibrate this station? You'll need to re-enter distance and re-aim bearing.</p>
-          <button type="button" id="recalibrate-confirm-yes">Yes, Recalibrate</button>
-          <button type="button" id="recalibrate-confirm-cancel">Cancel</button>
+          <button type="button" id="recalibrate-confirm-yes" class="btn btn-danger">Yes, Recalibrate</button>
+          <button type="button" id="recalibrate-confirm-cancel" class="btn btn-secondary">Cancel</button>
         </div>
       </div>
 
@@ -148,20 +142,17 @@
           <label for="distance_ft">Distance to pad (feet)</label>
           <input type="number" id="distance_ft" step="any" required>
 
-          <button type="button" id="set-bearing-btn">Point at the pad, then tap to Set Bearing</button>
+          <button type="button" id="set-bearing-btn" class="btn btn-secondary">🧭 Point at the pad, then tap to Set Bearing</button>
           <div id="bearing-captured"></div>
           <input type="hidden" id="bearing_degrees">
 
-          <button type="submit" id="register-btn" disabled>Register Station</button>
+          <button type="submit" id="register-btn" class="btn btn-primary" disabled>Register Station</button>
         </form>
       </div>
 
-      <div id="flight-overlay" class="overlay-panel" style="display:none;">
-        <div id="station-summary"></div>
-        <div id="flight-banner" class="banner-waiting">WAITING</div>
+      <div id="result-card" class="card card-accent">
         <div id="upload-status"></div>
         <div id="altitude-result"></div>
-        <button type="button" id="recalibrate-btn">Recalibrate</button>
       </div>
     </div>
 
@@ -352,16 +343,16 @@
       document.getElementById('bearing-captured').textContent = '';
       document.getElementById('register-btn').disabled = true;
       document.getElementById('register-btn').textContent = 'Save Changes';
-      document.getElementById('flight-overlay').style.display = 'none';
+      document.getElementById('status-strip').style.display = 'none';
+      document.getElementById('result-card').style.display = 'none';
       document.getElementById('calibration-overlay').style.display = 'block';
     });
 
     function showReady(info) {
       document.getElementById('calibration-overlay').style.display = 'none';
-      const flightOverlay = document.getElementById('flight-overlay');
-      flightOverlay.style.display = 'block';
-      document.getElementById('station-summary').textContent =
-        `${info.label} — ${info.distance_ft} ft, bearing ${info.bearing_degrees}°`;
+      document.getElementById('status-strip').style.display = 'flex';
+      document.getElementById('station-label').textContent =
+        `${info.label} · ${info.distance_ft}ft @ ${info.bearing_degrees}°`;
       if (!socketConnected) {
         socketConnected = true;
         connectStatusSocket(info.device_token);
@@ -370,7 +361,9 @@
 
     async function uploadSamples() {
       const statusEl = document.getElementById('upload-status');
+      const resultCard = document.getElementById('result-card');
       const info = JSON.parse(localStorage.getItem(storageKey));
+      resultCard.style.display = 'block';
       statusEl.textContent = 'Uploading…';
       try {
         const res = await fetch('/api/samples/', {
@@ -386,7 +379,7 @@
         const result = await res.json();
         statusEl.textContent = `Uploaded ${result.count} samples ✅`;
       } catch (err) {
-        statusEl.innerHTML = 'Upload failed. <button id="retry-upload-btn">Retry Upload</button>';
+        statusEl.innerHTML = 'Upload failed. <button id="retry-upload-btn" class="btn btn-danger">Retry Upload</button>';
         document.getElementById('retry-upload-btn').addEventListener('click', uploadSamples);
       }
     }
@@ -408,19 +401,20 @@
 
         const banner = document.getElementById('flight-banner');
         const display = {
-          null: ['WAITING', 'banner-waiting'],
-          pending: ['READY', 'banner-ready'],
-          launched: ['TRACKING', 'banner-tracking'],
-          landed: ['DONE', 'banner-done'],
+          null: ['WAITING', 'badge-muted'],
+          pending: ['READY', 'badge-yellow'],
+          launched: ['TRACKING', 'badge-green'],
+          landed: ['DONE', 'badge-cyan'],
         }[launchStatus];
         banner.textContent = display[0];
-        banner.className = display[1];
+        banner.className = `badge ${display[1]}`;
 
         if (launchStatus === 'launched' && previousStatus !== 'launched') {
           flightBuffer = [];
           recording = true;
           document.getElementById('upload-status').textContent = '';
           document.getElementById('altitude-result').textContent = '';
+          document.getElementById('result-card').style.display = 'none';
         }
         if (launchStatus === 'landed' && previousStatus !== 'landed') {
           recording = false;
@@ -429,9 +423,12 @@
         previousStatus = launchStatus;
 
         const resultEl = document.getElementById('altitude-result');
-        resultEl.textContent = state.result
-          ? `Best altitude: ${state.result.best_altitude_ft.toFixed(1)} ft`
-          : '';
+        if (state.result) {
+          document.getElementById('result-card').style.display = 'block';
+          resultEl.innerHTML = `<span class="badge badge-green">🏆 Best altitude: ${state.result.best_altitude_ft.toFixed(1)} ft</span>`;
+        } else {
+          resultEl.textContent = '';
+        }
       };
     }
   </script>

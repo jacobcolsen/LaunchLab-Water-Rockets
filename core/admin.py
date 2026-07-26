@@ -32,7 +32,7 @@ class ResultInline(admin.StackedInline):
 
 @admin.register(Launch)
 class LaunchAdmin(admin.ModelAdmin):
-    list_display = ("session", "number", "status", "launched_at", "landed_at")
+    list_display = ("session", "number", "name", "status", "launched_at", "landed_at")
     list_filter = ("session", "status")
     inlines = [SampleInline, ResultInline]
 

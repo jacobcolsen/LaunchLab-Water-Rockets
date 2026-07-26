@@ -40,6 +40,7 @@ class Launch(models.Model):
 
     session = models.ForeignKey(Session, related_name="launches", on_delete=models.CASCADE)
     number = models.PositiveIntegerField(blank=True, null=True)
+    name = models.CharField(max_length=200, blank=True, default="")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
     launched_at = models.DateTimeField(null=True, blank=True)
     landed_at = models.DateTimeField(null=True, blank=True)

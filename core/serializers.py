@@ -38,7 +38,7 @@ class StationCreateResponseSerializer(StationSerializer):
 class LaunchSerializer(serializers.ModelSerializer):
     class Meta:
         model = Launch
-        fields = ["id", "number", "status", "launched_at", "landed_at"]
+        fields = ["id", "number", "name", "status", "launched_at", "landed_at"]
 
 
 class ResultSerializer(serializers.ModelSerializer):

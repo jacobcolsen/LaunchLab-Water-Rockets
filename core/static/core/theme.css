@@ -1,0 +1,147 @@
+/* Mission Control theme - shared design tokens + component classes for
+   both /control and /station. Page-specific layout stays in each
+   template's own <style> block; only shared look-and-feel lives here. */
+
+:root {
+  --bg: #0b0f1a;
+  --surface: #141b2d;
+  --surface-elevated: #1c2540;
+  --border: rgba(255, 255, 255, 0.08);
+  --text-primary: #f5f7fa;
+  --text-muted: #93a0b8;
+
+  --accent-orange: #ff7a29;
+  --accent-orange-glow: rgba(255, 122, 41, 0.45);
+  --accent-cyan: #2dd4ee;
+  --accent-cyan-glow: rgba(45, 212, 238, 0.4);
+  --accent-green: #34d399;
+  --accent-yellow: #fbbf24;
+  --accent-red: #f87171;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+h1, h2, h3 {
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+a { color: var(--accent-cyan); }
+
+/* --- Buttons --- */
+.btn {
+  display: inline-block;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+  padding: 0.75rem 1.25rem;
+  border-radius: 14px;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.08s ease, filter 0.15s ease;
+}
+.btn:active { transform: scale(0.97); }
+.btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent-orange), #ff9a52);
+  color: #1a0e00;
+  box-shadow: 0 0 18px var(--accent-orange-glow);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+
+.btn-secondary {
+  background: var(--surface-elevated);
+  color: var(--accent-cyan);
+  border: 1px solid rgba(45, 212, 238, 0.35);
+}
+.btn-secondary:hover:not(:disabled) { filter: brightness(1.15); }
+
+.btn-danger {
+  background: linear-gradient(135deg, var(--accent-red), #ef4444);
+  color: #2a0a0a;
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border-radius: 999px;
+  background: rgba(20, 27, 45, 0.75);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  font-size: 1.2rem;
+  backdrop-filter: blur(6px);
+}
+
+/* --- Cards --- */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 1.25rem;
+}
+.card-accent {
+  border-top: 3px solid var(--accent-orange);
+}
+
+/* --- Badges / status pills --- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.85rem;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.badge-muted { background: rgba(255, 255, 255, 0.08); color: var(--text-muted); }
+.badge-green { background: rgba(52, 211, 153, 0.18); color: var(--accent-green); }
+.badge-yellow { background: rgba(251, 191, 36, 0.18); color: var(--accent-yellow); }
+.badge-cyan { background: rgba(45, 212, 238, 0.18); color: var(--accent-cyan); }
+.badge-red { background: rgba(248, 113, 113, 0.18); color: var(--accent-red); }
+.badge-orange { background: rgba(255, 122, 41, 0.18); color: var(--accent-orange); }
+
+/* --- Inputs --- */
+input[type="text"], input[type="number"] {
+  font-family: inherit;
+  font-size: 1rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+}
+input::placeholder { color: var(--text-muted); }
+
+/* --- Simple in-page confirmation panel (used instead of native confirm()) --- */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.75);
+  padding: 2rem;
+  text-align: center;
+}
+.confirm-overlay .confirm-box {
+  max-width: 340px;
+  width: 100%;
+}
+.confirm-overlay p {
+  font-size: 1.15rem;
+  margin-bottom: 1.25rem;
+}
+.confirm-overlay .btn { width: 100%; margin-top: 0.6rem; }

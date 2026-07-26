@@ -1,50 +1,74 @@
+{% load static %}
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Launch Control</title>
+  <link rel="stylesheet" href="{% static 'core/theme.css' %}">
   <style>
-    body { font-family: sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
-    h1 { margin-bottom: 0.25rem; }
-    h2 { margin-top: 2rem; }
-    .hint { color: #555; margin-bottom: 1.5rem; }
-    table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
-    th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #ddd; }
-    .ready { color: #1a7f37; font-weight: bold; }
-    .not-ready { color: #b54708; font-weight: bold; }
-    input, button { font-size: 1rem; padding: 0.5rem; }
-    #join-url { font-weight: bold; word-break: break-all; }
-    #qr-code { display: block; margin-top: 0.75rem; width: 160px; height: 160px; border: 1px solid #ddd; border-radius: 8px; }
-    .launch-panel { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
-    .launch-panel button { margin-right: 0.5rem; }
-    #conn-status { font-size: 0.85rem; color: #888; }
-    #launch-result { margin-top: 0.75rem; font-size: 1.2rem; font-weight: bold; color: #1a7f37; }
-    #auto-land-ticker { font-size: 0.85rem; color: #888; margin-top: 0.5rem; }
+    body { max-width: 720px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+    .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+    .top-bar h1 { margin: 0; font-size: 1.7rem; }
+    .hint { color: var(--text-muted); margin-bottom: 1rem; }
+    .card { margin-bottom: 1.5rem; }
+    .card h2 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+    th, td { text-align: left; padding: 0.6rem 0.4rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+    .join-row { display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: wrap; }
+    #join-url { font-weight: 700; color: var(--accent-cyan); word-break: break-all; }
+    #qr-code { width: 140px; height: 140px; border-radius: 12px; border: 1px solid var(--border); background: #fff; padding: 6px; }
+
+    #conn-status { font-size: 0.8rem; }
+
     #countdown-display {
-      display: none; text-align: center; font-size: 4rem; font-weight: bold;
-      padding: 1rem; color: #b54708;
+      display: none; text-align: center; font-size: 5rem; font-weight: 800;
+      padding: 0.5rem 0 1rem; color: var(--accent-orange);
+      text-shadow: 0 0 30px var(--accent-orange-glow);
     }
+    #launch-status { font-size: 1.1rem; margin-bottom: 0.75rem; }
+    #launch-status .badge { margin-left: 0.5rem; text-transform: uppercase; }
+    #launch-actions { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+    #launch-actions input[type="text"] { flex: 1; min-width: 160px; }
+    #auto-land-ticker { font-size: 0.85rem; color: var(--text-muted); margin-top: 0.6rem; }
+    #launch-result { margin-top: 0.85rem; }
+
+    #new-launch-day-btn { white-space: nowrap; }
   </style>
 </head>
 <body>
-  <h1>Launch Control</h1>
+  <div class="top-bar">
+    <h1>🚀 Launch Control</h1>
+    {% if session_id %}
+      <button id="new-launch-day-btn" class="btn btn-secondary">🆕 New Launch Day</button>
+    {% endif %}
+  </div>
 
   {% if not session_id %}
-    <p class="hint">Create a session to get started.</p>
-    <form id="create-session-form">
-      <input type="text" id="session-name" placeholder="Session name (e.g. Ward Activity 7/25)" required>
-      <button type="submit">Create Session</button>
-    </form>
+    <div class="card card-accent">
+      <p class="hint">Create a session to get started.</p>
+      <form id="create-session-form">
+        <input type="text" id="session-name" placeholder="Session name (e.g. Ward Activity 7/25)" required style="width: 100%; box-sizing: border-box; margin-bottom: 0.75rem;">
+        <button type="submit" class="btn btn-primary">Create Session</button>
+      </form>
+    </div>
   {% else %}
-    <p class="hint">
-      Stations should open:
-      <span id="join-url"></span>
-      <img id="qr-code" alt="Scan to join">
-    </p>
-    <p id="conn-status">connecting…</p>
+    <div class="card">
+      <h2>Join</h2>
+      <div class="join-row">
+        <img id="qr-code" alt="Scan to join">
+        <div>
+          <p class="hint" style="margin-bottom: 0.35rem;">Stations should open:</p>
+          <div id="join-url"></div>
+          <p id="conn-status" class="badge badge-muted" style="margin-top: 0.75rem;">connecting…</p>
+        </div>
+      </div>
+    </div>
 
-    <div class="launch-panel">
+    <div class="card card-accent">
+      <h2>Current Launch</h2>
       <div id="countdown-display"></div>
       <div id="launch-status">No launch yet.</div>
       <div id="launch-actions"></div>
@@ -52,28 +76,47 @@
       <div id="launch-result"></div>
     </div>
 
-    <table>
-      <thead>
-        <tr><th>Station</th><th>Distance (ft)</th><th>Bearing (°)</th><th>Status</th></tr>
-      </thead>
-      <tbody id="roster-body">
-        <tr><td colspan="4">Waiting for data…</td></tr>
-      </tbody>
-    </table>
+    <div class="card">
+      <h2>Station Roster</h2>
+      <table>
+        <thead>
+          <tr><th>Station</th><th>Distance (ft)</th><th>Bearing (°)</th><th>Status</th></tr>
+        </thead>
+        <tbody id="roster-body">
+          <tr><td colspan="4">Waiting for data…</td></tr>
+        </tbody>
+      </table>
+    </div>
 
-    <h2>Launch History</h2>
-    <table>
-      <thead>
-        <tr><th>#</th><th>Status</th><th>Best Altitude</th></tr>
-      </thead>
-      <tbody id="history-body">
-        <tr><td colspan="3">Loading…</td></tr>
-      </tbody>
-    </table>
+    <div class="card">
+      <h2>Launch History</h2>
+      <table>
+        <thead>
+          <tr><th>#</th><th>Name</th><th>Status</th><th>Best Altitude</th></tr>
+        </thead>
+        <tbody id="history-body">
+          <tr><td colspan="4">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div id="new-launch-day-confirm" class="confirm-overlay">
+      <div class="confirm-box card">
+        <p>Start a new Launch Day? This won't delete anything — old sessions stay saved, you'll just start fresh.</p>
+        <button type="button" id="new-launch-day-yes" class="btn btn-danger">Yes, Start Fresh</button>
+        <button type="button" id="new-launch-day-cancel" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
   {% endif %}
 
   <script>
     const sessionId = {{ session_id|default:"null" }};
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : str;
+      return div.innerHTML;
+    }
 
     if (!sessionId) {
       document.getElementById('create-session-form').addEventListener('submit', async (e) => {
@@ -91,6 +134,16 @@
       document.getElementById('join-url').textContent =
         `${window.location.origin}/station?session=${sessionId}`;
       document.getElementById('qr-code').src = `/sessions/${sessionId}/qr.png`;
+
+      document.getElementById('new-launch-day-btn').addEventListener('click', () => {
+        document.getElementById('new-launch-day-confirm').style.display = 'flex';
+      });
+      document.getElementById('new-launch-day-cancel').addEventListener('click', () => {
+        document.getElementById('new-launch-day-confirm').style.display = 'none';
+      });
+      document.getElementById('new-launch-day-yes').addEventListener('click', () => {
+        window.location = '/control';
+      });
 
       let isCountingDown = false;
       let lastRenderedLaunchStatus = null;
@@ -121,7 +174,7 @@
           beep(440, 150);
           await new Promise((r) => setTimeout(r, 1000));
         }
-        countdownEl.textContent = 'LIFTOFF!';
+        countdownEl.textContent = 'LIFTOFF! 🚀';
         beep(880, 400);
         await fetch(`/api/launches/${launch.id}/launched/`, { method: 'POST' });
         await new Promise((r) => setTimeout(r, 800));
@@ -146,10 +199,10 @@
         clearAutoLandTimer();
         let secondsLeft = 30;
         const tickerEl = document.getElementById('auto-land-ticker');
-        tickerEl.textContent = `(auto-lands in ${secondsLeft}s if not marked)`;
+        tickerEl.textContent = `⏱ auto-lands in ${secondsLeft}s if not marked`;
         autoLandCountdownInterval = setInterval(() => {
           secondsLeft -= 1;
-          tickerEl.textContent = `(auto-lands in ${secondsLeft}s if not marked)`;
+          tickerEl.textContent = `⏱ auto-lands in ${secondsLeft}s if not marked`;
           if (secondsLeft <= 0) clearInterval(autoLandCountdownInterval);
         }, 1000);
         autoLandTimer = setTimeout(() => {
@@ -165,20 +218,26 @@
         }
         body.innerHTML = stations.map((s) => `
           <tr>
-            <td>${s.label}</td>
+            <td>${escapeHtml(s.label)}</td>
             <td>${s.distance_ft}</td>
             <td>${s.bearing_degrees}</td>
-            <td class="${s.connected ? 'ready' : 'not-ready'}">${s.connected ? 'Connected' : 'Disconnected'}</td>
+            <td><span class="badge ${s.connected ? 'badge-green' : 'badge-red'}">${s.connected ? '📡 Connected' : '✕ Disconnected'}</span></td>
           </tr>
         `).join('');
       }
 
       function renderResult(result) {
         const el = document.getElementById('launch-result');
-        el.textContent = result
-          ? `Best altitude: ${result.best_altitude_ft.toFixed(1)} ft (${result.method})`
+        el.innerHTML = result
+          ? `<span class="badge badge-green">🏆 Best altitude: ${result.best_altitude_ft.toFixed(1)} ft (${result.method})</span>`
           : '';
       }
+
+      const statusBadge = {
+        pending: ['badge-yellow', 'PENDING'],
+        launched: ['badge-orange', 'LAUNCHED'],
+        landed: ['badge-cyan', 'LANDED'],
+      };
 
       function renderLaunch(launch) {
         if (isCountingDown) return;
@@ -189,15 +248,23 @@
 
         if (!launch) {
           statusEl.textContent = 'No launch yet.';
-          actionsEl.innerHTML = '<button id="btn-new-launch">Start New Launch</button>';
+          actionsEl.innerHTML = `
+            <input type="text" id="launch-name-input" placeholder="Rocket name (optional)">
+            <button id="btn-new-launch" class="btn btn-primary">🚀 Start New Launch</button>
+          `;
         } else {
-          statusEl.textContent = `Launch #${launch.number} — status: ${launch.status}`;
+          const [badgeClass, badgeText] = statusBadge[launch.status] || ['badge-muted', launch.status];
+          const nameHtml = launch.name ? ` — <strong>${escapeHtml(launch.name)}</strong>` : '';
+          statusEl.innerHTML = `Launch #${launch.number}${nameHtml} <span class="badge ${badgeClass}">${badgeText}</span>`;
           if (launch.status === 'pending') {
-            actionsEl.innerHTML = '<button id="btn-begin-countdown">Begin Countdown</button>';
+            actionsEl.innerHTML = '<button id="btn-begin-countdown" class="btn btn-primary">▶ Begin Countdown</button>';
           } else if (launch.status === 'launched') {
-            actionsEl.innerHTML = '<button id="btn-mark-landed">Mark Landed</button>';
+            actionsEl.innerHTML = '<button id="btn-mark-landed" class="btn btn-secondary">🛬 Mark Landed</button>';
           } else {
-            actionsEl.innerHTML = '<button id="btn-new-launch">Start New Launch</button>';
+            actionsEl.innerHTML = `
+              <input type="text" id="launch-name-input" placeholder="Rocket name (optional)">
+              <button id="btn-new-launch" class="btn btn-primary">🚀 Start New Launch</button>
+            `;
           }
         }
 
@@ -211,13 +278,15 @@
 
         const newLaunchBtn = document.getElementById('btn-new-launch');
         if (newLaunchBtn) {
-          newLaunchBtn.addEventListener('click', () =>
+          newLaunchBtn.addEventListener('click', () => {
+            const nameInput = document.getElementById('launch-name-input');
+            const name = nameInput ? nameInput.value : '';
             fetch(`/api/sessions/${sessionId}/launches/`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: '{}',
-            })
-          );
+              body: JSON.stringify({ name }),
+            });
+          });
         }
         const countdownBtn = document.getElementById('btn-begin-countdown');
         if (countdownBtn) {
@@ -237,16 +306,20 @@
         const launches = await res.json();
         const body = document.getElementById('history-body');
         if (launches.length === 0) {
-          body.innerHTML = '<tr><td colspan="3">No launches yet.</td></tr>';
+          body.innerHTML = '<tr><td colspan="4">No launches yet.</td></tr>';
           return;
         }
-        body.innerHTML = launches.map((l) => `
+        body.innerHTML = launches.map((l) => {
+          const [badgeClass, badgeText] = statusBadge[l.status] || ['badge-muted', l.status];
+          return `
           <tr>
             <td>#${l.number}</td>
-            <td>${l.status}</td>
+            <td>${l.name ? escapeHtml(l.name) : '—'}</td>
+            <td><span class="badge ${badgeClass}">${badgeText}</span></td>
             <td>${l.result ? l.result.best_altitude_ft.toFixed(1) + ' ft' : '—'}</td>
           </tr>
-        `).join('');
+        `;
+        }).join('');
       }
 
       async function fetchRoster() {
@@ -257,8 +330,16 @@
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws/sessions/${sessionId}/`);
 
-      ws.onopen = () => { document.getElementById('conn-status').textContent = 'live'; };
-      ws.onclose = () => { document.getElementById('conn-status').textContent = 'disconnected'; };
+      ws.onopen = () => {
+        const el = document.getElementById('conn-status');
+        el.textContent = '● live';
+        el.className = 'badge badge-green';
+      };
+      ws.onclose = () => {
+        const el = document.getElementById('conn-status');
+        el.textContent = '● disconnected';
+        el.className = 'badge badge-red';
+      };
       ws.onmessage = (event) => {
         const state = JSON.parse(event.data);
         renderRoster(state.stations);
