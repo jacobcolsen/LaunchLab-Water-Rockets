@@ -110,7 +110,7 @@
         osc.stop(audioCtx.currentTime + durationMs / 1000);
       }
 
-      async function runCountdown(launchId) {
+      async function runCountdown(launch) {
         isCountingDown = true;
         clearAutoLandTimer();
         const countdownEl = document.getElementById('countdown-display');
@@ -123,10 +123,17 @@
         }
         countdownEl.textContent = 'LIFTOFF!';
         beep(880, 400);
-        await fetch(`/api/launches/${launchId}/launched/`, { method: 'POST' });
+        await fetch(`/api/launches/${launch.id}/launched/`, { method: 'POST' });
         await new Promise((r) => setTimeout(r, 800));
         countdownEl.style.display = 'none';
         isCountingDown = false;
+        // Render the launched state ourselves rather than relying on the
+        // WebSocket push the /launched/ call triggers - that message
+        // typically arrives while isCountingDown is still true above and
+        // gets silently skipped, which is why "Mark Landed" was never
+        // showing up. Any later WS message confirming the same status is
+        // harmless (renderLaunch won't restart the auto-land timer twice).
+        renderLaunch({ ...launch, status: 'launched' });
       }
 
       function clearAutoLandTimer() {
@@ -214,7 +221,7 @@
         }
         const countdownBtn = document.getElementById('btn-begin-countdown');
         if (countdownBtn) {
-          countdownBtn.addEventListener('click', () => runCountdown(launch.id));
+          countdownBtn.addEventListener('click', () => runCountdown(launch));
         }
         const landedBtn = document.getElementById('btn-mark-landed');
         if (landedBtn) {
