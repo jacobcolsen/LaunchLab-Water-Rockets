@@ -1,6 +1,9 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from .models import Launch, Result, Session, Station
+
+CONNECTION_STALE_SECONDS = 15
 
 
 class SessionSerializer(serializers.ModelSerializer):
@@ -10,9 +13,21 @@ class SessionSerializer(serializers.ModelSerializer):
 
 
 class StationSerializer(serializers.ModelSerializer):
+    # Computed rather than a stored flag - "connected" is always freshly
+    # judged from how recently last_seen_at was touched, so it self-heals
+    # even if a disconnect signal never fires (e.g. the server process
+    # itself got restarted mid-connection).
+    connected = serializers.SerializerMethodField()
+
     class Meta:
         model = Station
-        fields = ["id", "label", "distance_ft", "bearing_degrees", "ready", "created_at"]
+        fields = ["id", "label", "distance_ft", "bearing_degrees", "connected", "created_at"]
+
+    def get_connected(self, obj):
+        if not obj.last_seen_at:
+            return False
+        age = (timezone.now() - obj.last_seen_at).total_seconds()
+        return age < CONNECTION_STALE_SECONDS
 
 
 class StationCreateResponseSerializer(StationSerializer):

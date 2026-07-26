@@ -168,7 +168,7 @@
             <td>${s.label}</td>
             <td>${s.distance_ft}</td>
             <td>${s.bearing_degrees}</td>
-            <td class="${s.ready ? 'ready' : 'not-ready'}">${s.ready ? 'Connected' : 'Disconnected'}</td>
+            <td class="${s.connected ? 'ready' : 'not-ready'}">${s.connected ? 'Connected' : 'Disconnected'}</td>
           </tr>
         `).join('');
       }
@@ -249,6 +249,11 @@
         `).join('');
       }
 
+      async function fetchRoster() {
+        const res = await fetch(`/api/sessions/${sessionId}/stations/`);
+        renderRoster(await res.json());
+      }
+
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${protocol}://${window.location.host}/ws/sessions/${sessionId}/`);
 
@@ -261,6 +266,15 @@
         renderResult(state.result);
         fetchHistory();
       };
+
+      // A deliberate exception to WebSocket-push-only: a station's
+      // "connected" status is computed from how recently it was last
+      // heard from, so it can go stale with no event ever announcing it
+      // (e.g. a phone silently dying, or a server restart wiping out
+      // whatever would have pushed a "disconnected" broadcast). Polling
+      // re-fetches the roster regardless, so that staleness always gets
+      // re-checked even when nothing else happens to trigger a re-render.
+      setInterval(fetchRoster, 5000);
     }
   </script>
 </body>

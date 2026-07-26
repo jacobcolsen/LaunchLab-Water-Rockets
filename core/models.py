@@ -21,7 +21,7 @@ class Station(models.Model):
     device_token = models.CharField(max_length=64, unique=True, default=generate_device_token)
     distance_ft = models.FloatField()
     bearing_degrees = models.FloatField()
-    ready = models.BooleanField(default=False)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

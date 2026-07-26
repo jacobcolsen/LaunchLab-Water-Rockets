@@ -6,8 +6,8 @@ from .models import Launch, Result, Sample, Session, Station
 class StationInline(admin.TabularInline):
     model = Station
     extra = 1
-    fields = ("label", "distance_ft", "bearing_degrees", "ready", "device_token")
-    readonly_fields = ("device_token",)
+    fields = ("label", "distance_ft", "bearing_degrees", "last_seen_at", "device_token")
+    readonly_fields = ("device_token", "last_seen_at")
 
 
 @admin.register(Session)
@@ -39,8 +39,8 @@ class LaunchAdmin(admin.ModelAdmin):
 
 @admin.register(Station)
 class StationAdmin(admin.ModelAdmin):
-    list_display = ("label", "session", "distance_ft", "bearing_degrees", "ready")
-    list_filter = ("session", "ready")
+    list_display = ("label", "session", "distance_ft", "bearing_degrees", "last_seen_at")
+    list_filter = ("session",)
 
 
 @admin.register(Sample)
