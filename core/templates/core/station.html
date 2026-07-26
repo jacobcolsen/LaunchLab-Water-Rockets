@@ -107,6 +107,17 @@
       font-size: 4.5rem; font-weight: 800; color: var(--accent-orange);
       text-shadow: 0 0 40px var(--accent-orange-glow);
     }
+
+    /* --- Liftoff confirmation banner - bottom of screen, well clear of
+       the crosshair --- */
+    #launch-banner {
+      position: fixed; left: 1rem; right: 1rem; bottom: 1.5rem; z-index: 20;
+      display: none; text-align: center; pointer-events: none;
+      background: var(--accent-green); color: #06281c;
+      font-size: 1.6rem; font-weight: 800; letter-spacing: 0.03em;
+      padding: 1rem; border-radius: 16px;
+      box-shadow: 0 0 30px var(--accent-green-glow);
+    }
   </style>
 </head>
 <body>
@@ -128,6 +139,7 @@
       <div id="landscape-warning">Please rotate your phone to portrait.</div>
       <div id="camera-reconnect-banner"></div>
       <div id="station-countdown"></div>
+      <div id="launch-banner">🚀 LAUNCH!</div>
 
       <div id="status-strip" style="display:none;">
         <div class="left">
@@ -234,10 +246,13 @@
         beep(440, 150);
         await new Promise((r) => setTimeout(r, 1000));
       }
-      el.textContent = '🚀';
-      beep(880, 400);
-      await new Promise((r) => setTimeout(r, 800));
       el.style.display = 'none';
+      beep(880, 400);
+
+      const banner = document.getElementById('launch-banner');
+      banner.style.display = 'block';
+      await new Promise((r) => setTimeout(r, 1000));
+      banner.style.display = 'none';
     }
 
     function handleOrientation(event) {
