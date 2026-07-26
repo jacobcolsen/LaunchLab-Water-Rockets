@@ -86,6 +86,7 @@
       border-radius: 8px; border: none; background: #b91c1c; color: #fff;
     }
     #station-summary { text-align: center; color: #ccc; font-size: 0.9rem; margin-bottom: 0.5rem; }
+    #altitude-result { margin-top: 0.75rem; text-align: center; font-size: 1.3rem; font-weight: bold; color: #9ae6b4; }
   </style>
 </head>
 <body>
@@ -126,6 +127,7 @@
         <div id="station-summary"></div>
         <div id="flight-banner" class="banner-waiting">WAITING</div>
         <div id="upload-status"></div>
+        <div id="altitude-result"></div>
       </div>
     </div>
 
@@ -307,12 +309,18 @@
           flightBuffer = [];
           recording = true;
           document.getElementById('upload-status').textContent = '';
+          document.getElementById('altitude-result').textContent = '';
         }
         if (launchStatus === 'landed' && previousStatus !== 'landed') {
           recording = false;
           uploadSamples();
         }
         previousStatus = launchStatus;
+
+        const resultEl = document.getElementById('altitude-result');
+        resultEl.textContent = state.result
+          ? `Best altitude: ${state.result.best_altitude_ft.toFixed(1)} ft`
+          : '';
       };
     }
   </script>

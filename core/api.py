@@ -5,6 +5,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .altitude import compute_result_for_launch
 from .models import Launch, Sample, Session, Station
 from .realtime import broadcast_session_state
 from .serializers import (
@@ -98,6 +99,8 @@ class SampleUploadView(APIView):
         sample, created = Sample.objects.update_or_create(
             launch=launch, station=station, defaults={"data": data}
         )
+        compute_result_for_launch(launch)
+        broadcast_session_state(launch.session_id)
         return Response(
             {"id": sample.id, "count": len(data)},
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,

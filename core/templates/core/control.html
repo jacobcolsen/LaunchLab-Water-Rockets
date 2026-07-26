@@ -17,6 +17,7 @@
     .launch-panel { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 8px; }
     .launch-panel button { margin-right: 0.5rem; }
     #conn-status { font-size: 0.85rem; color: #888; }
+    #launch-result { margin-top: 0.75rem; font-size: 1.2rem; font-weight: bold; color: #1a7f37; }
   </style>
 </head>
 <body>
@@ -38,6 +39,7 @@
     <div class="launch-panel">
       <div id="launch-status">No launch yet.</div>
       <div id="launch-actions"></div>
+      <div id="launch-result"></div>
     </div>
 
     <table>
@@ -83,6 +85,13 @@
             <td class="${s.ready ? 'ready' : 'not-ready'}">${s.ready ? 'Ready' : 'Not Ready'}</td>
           </tr>
         `).join('');
+      }
+
+      function renderResult(result) {
+        const el = document.getElementById('launch-result');
+        el.textContent = result
+          ? `Best altitude: ${result.best_altitude_ft.toFixed(1)} ft (${result.method})`
+          : '';
       }
 
       function renderLaunch(launch) {
@@ -136,6 +145,7 @@
         const state = JSON.parse(event.data);
         renderRoster(state.stations);
         renderLaunch(state.launch);
+        renderResult(state.result);
       };
     }
   </script>
