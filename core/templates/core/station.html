@@ -39,14 +39,14 @@
     #crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
 
     #elevation-readout {
-      position: fixed; top: 1.25rem; left: 50%; transform: translateX(-50%); z-index: 10;
+      position: fixed; top: 4.25rem; left: 50%; transform: translateX(-50%); z-index: 10;
       background: rgba(11,15,26,0.65); backdrop-filter: blur(4px);
       padding: 0.4rem 1.25rem; border-radius: 999px; border: 1px solid var(--border);
       font-size: 2rem; font-weight: 800; color: var(--accent-cyan);
       text-shadow: 0 0 14px var(--accent-cyan-glow); font-variant-numeric: tabular-nums;
     }
     #current-heading {
-      position: fixed; top: 4.5rem; left: 50%; transform: translateX(-50%); z-index: 10;
+      position: fixed; top: 7.75rem; left: 50%; transform: translateX(-50%); z-index: 10;
       background: rgba(11,15,26,0.5); padding: 0.2rem 0.75rem; border-radius: 999px;
       font-size: 0.85rem; color: var(--text-muted);
     }
@@ -58,7 +58,7 @@
     }
 
     #camera-reconnect-banner {
-      position: fixed; top: 8rem; left: 50%; transform: translateX(-50%); z-index: 25;
+      position: fixed; top: 10rem; left: 50%; transform: translateX(-50%); z-index: 25;
       display: none; background: var(--accent-red); color: #2a0a0a; padding: 0.5rem 1rem;
       border-radius: 999px; font-size: 0.9rem; text-align: center; font-weight: 700;
     }
@@ -71,6 +71,7 @@
     #status-strip {
       position: fixed; top: 0; left: 0; right: 0; z-index: 15;
       display: flex; align-items: center; justify-content: space-between;
+      min-height: 3.5rem; box-sizing: border-box;
       padding: 0.6rem 0.85rem; background: rgba(11,15,26,0.6); backdrop-filter: blur(6px);
       border-bottom: 1px solid var(--border);
     }
