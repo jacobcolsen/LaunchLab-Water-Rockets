@@ -38,7 +38,7 @@ class StationListCreateView(generics.ListCreateAPIView):
 
     def perform_create(self, serializer):
         session = get_object_or_404(Session, pk=self.kwargs["session_id"])
-        serializer.save(session=session, ready=True)
+        serializer.save(session=session)
         broadcast_session_state(session.id)
 
 
@@ -109,7 +109,7 @@ class StationRecalibrateView(APIView):
         }
         serializer = StationCreateResponseSerializer(station, data=data, partial=True)
         serializer.is_valid(raise_exception=True)
-        serializer.save(ready=True)
+        serializer.save()
         broadcast_session_state(station.session_id)
         return Response(serializer.data, status=status.HTTP_200_OK)
 

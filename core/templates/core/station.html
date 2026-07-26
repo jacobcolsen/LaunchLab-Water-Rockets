@@ -364,7 +364,7 @@
         `${info.label} — ${info.distance_ft} ft, bearing ${info.bearing_degrees}°`;
       if (!socketConnected) {
         socketConnected = true;
-        connectStatusSocket();
+        connectStatusSocket(info.device_token);
       }
     }
 
@@ -391,9 +391,11 @@
       }
     }
 
-    function connectStatusSocket() {
+    function connectStatusSocket(deviceToken) {
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-      const ws = new WebSocket(`${protocol}://${window.location.host}/ws/sessions/${sessionId}/`);
+      const ws = new WebSocket(
+        `${protocol}://${window.location.host}/ws/sessions/${sessionId}/?device_token=${deviceToken}`
+      );
       ws.onmessage = (event) => {
         const state = JSON.parse(event.data);
         const launch = state.launch;
