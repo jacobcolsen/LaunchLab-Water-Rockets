@@ -87,6 +87,7 @@
     }
     #station-summary { text-align: center; color: #ccc; font-size: 0.9rem; margin-bottom: 0.5rem; }
     #altitude-result { margin-top: 0.75rem; text-align: center; font-size: 1.3rem; font-weight: bold; color: #9ae6b4; }
+    #recalibrate-btn { background: #374151; color: #ddd; font-size: 0.95rem; padding: 0.6rem; }
   </style>
 </head>
 <body>
@@ -128,6 +129,7 @@
         <div id="flight-banner" class="banner-waiting">WAITING</div>
         <div id="upload-status"></div>
         <div id="altitude-result"></div>
+        <button type="button" id="recalibrate-btn">Recalibrate</button>
       </div>
     </div>
 
@@ -172,6 +174,8 @@
     let flightBuffer = [];
     let currentLaunchId = null;
     let previousStatus = null;
+    let isRecalibrating = false;
+    let socketConnected = false;
 
     function handleOrientation(event) {
       if (event.beta === null || event.beta === undefined) return;
@@ -244,14 +248,42 @@
         distance_ft: parseFloat(document.getElementById('distance_ft').value),
         bearing_degrees: parseFloat(document.getElementById('bearing_degrees').value),
       };
-      const res = await fetch(`/api/sessions/${sessionId}/stations/`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+
+      let res;
+      if (isRecalibrating) {
+        const cached = JSON.parse(localStorage.getItem(storageKey));
+        res = await fetch('/api/stations/recalibrate/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_token: cached.device_token, ...payload }),
+        });
+      } else {
+        res = await fetch(`/api/sessions/${sessionId}/stations/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
       const data = await res.json();
       localStorage.setItem(storageKey, JSON.stringify(data));
+      isRecalibrating = false;
       showReady(data);
+    });
+
+    document.getElementById('recalibrate-btn').addEventListener('click', () => {
+      if (!confirm('Recalibrate this station? You\'ll need to re-enter distance and re-aim bearing.')) {
+        return;
+      }
+      const cached = JSON.parse(localStorage.getItem(storageKey));
+      isRecalibrating = true;
+      document.getElementById('label').value = cached.label;
+      document.getElementById('distance_ft').value = cached.distance_ft;
+      document.getElementById('bearing_degrees').value = '';
+      document.getElementById('bearing-captured').textContent = '';
+      document.getElementById('register-btn').disabled = true;
+      document.getElementById('register-btn').textContent = 'Save Changes';
+      document.getElementById('flight-overlay').style.display = 'none';
+      document.getElementById('calibration-overlay').style.display = 'block';
     });
 
     function showReady(info) {
@@ -260,7 +292,10 @@
       flightOverlay.style.display = 'block';
       document.getElementById('station-summary').textContent =
         `${info.label} — ${info.distance_ft} ft, bearing ${info.bearing_degrees}°`;
-      connectStatusSocket();
+      if (!socketConnected) {
+        socketConnected = true;
+        connectStatusSocket();
+      }
     }
 
     async function uploadSamples() {

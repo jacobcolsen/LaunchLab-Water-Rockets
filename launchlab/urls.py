@@ -24,6 +24,7 @@ from core.api import (
     SampleUploadView,
     SessionCreateView,
     StationListCreateView,
+    StationRecalibrateView,
 )
 from core.views import control_view, health, station_view
 
@@ -54,4 +55,9 @@ urlpatterns = [
         name='api-launch-landed',
     ),
     path('api/samples/', SampleUploadView.as_view(), name='api-sample-upload'),
+    path(
+        'api/stations/recalibrate/',
+        StationRecalibrateView.as_view(),
+        name='api-station-recalibrate',
+    ),
 ]
