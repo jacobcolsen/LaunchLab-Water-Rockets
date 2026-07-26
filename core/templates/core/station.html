@@ -95,6 +95,15 @@
     #upload-status { font-size: 0.95rem; }
     #upload-status .btn { margin-top: 0.5rem; width: 100%; }
     #altitude-result { margin-top: 0.5rem; }
+
+    /* --- Countdown overlay, mirrored from /control - sits above the HUD
+       but never blocks the crosshair/camera, and doesn't intercept taps --- */
+    #station-countdown {
+      position: fixed; inset: 0; z-index: 20; display: none; align-items: center;
+      justify-content: center; pointer-events: none;
+      font-size: 7rem; font-weight: 800; color: var(--accent-orange);
+      text-shadow: 0 0 40px var(--accent-orange-glow);
+    }
   </style>
 </head>
 <body>
@@ -115,6 +124,7 @@
       <div id="current-heading">heading: --°</div>
       <div id="landscape-warning">Please rotate your phone to portrait.</div>
       <div id="camera-reconnect-banner"></div>
+      <div id="station-countdown"></div>
 
       <div id="status-strip" style="display:none;">
         <div class="left">
@@ -199,6 +209,33 @@
     let previousStatus = null;
     let isRecalibrating = false;
     let socketConnected = false;
+    let audioCtx = null;
+
+    function beep(freq, durationMs) {
+      if (!audioCtx) return;
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+      osc.start();
+      osc.stop(audioCtx.currentTime + durationMs / 1000);
+    }
+
+    async function runStationCountdown() {
+      const el = document.getElementById('station-countdown');
+      el.style.display = 'flex';
+      for (let n = 5; n >= 1; n--) {
+        el.textContent = n;
+        beep(440, 150);
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      el.textContent = '🚀';
+      beep(880, 400);
+      await new Promise((r) => setTimeout(r, 800));
+      el.style.display = 'none';
+    }
 
     function handleOrientation(event) {
       if (event.beta === null || event.beta === undefined) return;
@@ -265,6 +302,10 @@
       const errorEl = document.getElementById('permission-error');
       errorEl.style.display = 'none';
       try {
+        // Created here (a real user gesture) so later countdown beeps -
+        // triggered by an incoming WebSocket message, not a fresh tap -
+        // are still allowed to play on iOS Safari.
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (typeof DeviceOrientationEvent !== 'undefined' &&
             typeof DeviceOrientationEvent.requestPermission === 'function') {
           const motionPerm = await DeviceOrientationEvent.requestPermission();
@@ -393,6 +434,10 @@
         const state = JSON.parse(event.data);
         if (state.type === 'ping') {
           ws.send(JSON.stringify({ type: 'pong' }));
+          return;
+        }
+        if (state.type === 'countdown_start') {
+          runStationCountdown();
           return;
         }
         const launch = state.launch;

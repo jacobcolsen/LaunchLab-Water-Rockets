@@ -59,6 +59,18 @@ class SessionConsumer(AsyncWebsocketConsumer):
         if payload.get("type") == "pong" and self.station_id:
             self.last_pong = time.monotonic()
             await self.touch_station(station_id=self.station_id)
+        elif payload.get("type") == "countdown_start":
+            # Purely a cosmetic relay so every connected station can mirror
+            # /control's countdown animation live - the actual "start
+            # recording" moment stays tied to the real launched broadcast,
+            # not to this.
+            await self.channel_layer.group_send(
+                self.group_name,
+                {"type": "countdown.start", "launch_id": payload.get("launch_id")},
+            )
+
+    async def countdown_start(self, event):
+        await self.send(text_data=json.dumps({"type": "countdown_start", "launch_id": event["launch_id"]}))
 
     async def heartbeat_loop(self):
         # Detects a phone that vanished without a clean WebSocket close (app

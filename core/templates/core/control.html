@@ -166,6 +166,10 @@
       async function runCountdown(launch) {
         isCountingDown = true;
         clearAutoLandTimer();
+        // Mirrors the countdown live on every connected station's phone -
+        // purely cosmetic, the actual recording start still waits for the
+        // real launched broadcast below, unaffected by this.
+        ws.send(JSON.stringify({ type: 'countdown_start', launch_id: launch.id }));
         const countdownEl = document.getElementById('countdown-display');
         document.getElementById('launch-actions').innerHTML = '';
         countdownEl.style.display = 'block';
@@ -342,6 +346,7 @@
       };
       ws.onmessage = (event) => {
         const state = JSON.parse(event.data);
+        if (state.type === 'countdown_start') return; // control triggers its own local countdown directly
         renderRoster(state.stations);
         renderLaunch(state.launch);
         renderResult(state.result);
