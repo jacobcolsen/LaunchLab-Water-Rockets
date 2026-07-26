@@ -398,6 +398,10 @@
       );
       ws.onmessage = (event) => {
         const state = JSON.parse(event.data);
+        if (state.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong' }));
+          return;
+        }
         const launch = state.launch;
         const launchStatus = launch ? launch.status : null;
         currentLaunchId = launch ? launch.id : null;
