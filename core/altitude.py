@@ -43,7 +43,7 @@ def compute_result_for_launch(launch: Launch):
     triangulated = triangulate(stations_samples)
     if triangulated is None:
         return None
-    best_altitude_ft, used_ids = triangulated
+    best_altitude_ft, used_ids, _trajectory = triangulated
 
     breakdown = {
         station.label: {

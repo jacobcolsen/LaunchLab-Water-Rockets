@@ -84,8 +84,10 @@ def _residual(point, origin, direction):
 
 def triangulate(stations_samples):
     """stations_samples: list of (Station, time-sorted sample list) pairs,
-    each with 2+ samples. Returns (best_altitude_ft, {used_station_id, ...})
-    or None if there's no usable time overlap across the stations."""
+    each with 2+ samples. Returns (best_altitude_ft, {used_station_id, ...},
+    trajectory) where trajectory is a list of (t, x, y, z) tuples for the
+    surviving stations at every grid timestep, or None if there's no
+    usable time overlap across the stations."""
     starts = [samples[0]["t"] for _, samples in stations_samples]
     ends = [samples[-1]["t"] for _, samples in stations_samples]
     grid_start = max(starts)
@@ -102,7 +104,7 @@ def triangulate(stations_samples):
     interpolated = [_interp_series(samples, grid_times) for _, samples in stations_samples]
 
     def solve_with(indices):
-        heights = []
+        points = []  # (t, x, y, z) for every grid timestep with 2+ active rays
         per_station_residuals = {i: [] for i in indices}
         for t_idx in range(len(grid_times)):
             rays = []
@@ -118,13 +120,13 @@ def triangulate(stations_samples):
             if len(rays) < 2:
                 continue
             point = _solve_point(rays)
-            heights.append(point[2])
+            points.append((grid_times[t_idx], float(point[0]), float(point[1]), float(point[2])))
             for i, (origin, direction) in zip(active, rays):
                 per_station_residuals[i].append(_residual(point, origin, direction))
-        return heights, per_station_residuals
+        return points, per_station_residuals
 
     indices = list(range(len(stations)))
-    heights, per_station_residuals = solve_with(indices)
+    points, per_station_residuals = solve_with(indices)
 
     while len(indices) > 2:
         mean_residuals = {
@@ -146,10 +148,11 @@ def triangulate(stations_samples):
         if not is_outlier:
             break
         indices.remove(worst_i)
-        heights, per_station_residuals = solve_with(indices)
+        points, per_station_residuals = solve_with(indices)
 
-    if not heights:
+    if not points:
         return None
 
     used_ids = {stations[i].id for i in indices}
-    return float(max(heights)), used_ids
+    best_altitude_ft = max(p[3] for p in points)
+    return float(best_altitude_ft), used_ids, points

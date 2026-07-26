@@ -18,6 +18,7 @@ from django.contrib import admin
 from django.urls import path
 
 from core.api import (
+    LaunchDebriefView,
     LaunchListCreateView,
     LaunchMarkLandedView,
     LaunchMarkLaunchedView,
@@ -58,6 +59,11 @@ urlpatterns = [
         'api/launches/<int:launch_id>/landed/',
         LaunchMarkLandedView.as_view(),
         name='api-launch-landed',
+    ),
+    path(
+        'api/launches/<int:launch_id>/debrief/',
+        LaunchDebriefView.as_view(),
+        name='api-launch-debrief',
     ),
     path('api/samples/', SampleUploadView.as_view(), name='api-sample-upload'),
     path(

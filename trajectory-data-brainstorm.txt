@@ -1,0 +1,91 @@
+WHAT ELSE CAN WE GET FROM THE TRAJECTORY DATA?
+Brainstorm / Planning Notes
+================================================================
+
+CONTEXT
+-------
+Right now, core/triangulation.py reconstructs a full height-over-time
+curve (and, for multi-station launches, the underlying 3D x/y/z position
+at every timestamp) - but the pipeline only keeps the single number that
+matters for the MVP: peak height. Everything else about the reconstructed
+flight path gets thrown away right after that max() call. Since the hard
+part (turning raw angle data into an actual 3D trajectory) is already
+built and working, a lot of these ideas are "just" a matter of keeping
+more of what we already compute, rather than new sensor work.
+
+Two buckets below: things that are cheap because the data already exists
+somewhere, and things that would need the pipeline to start retaining the
+full trajectory (not just its max) or capturing something new.
+
+
+ALREADY-CHEAP (existing stored data, just needs surfacing)
+==============================================================
+- Flight duration: Launch already has launched_at and landed_at - total
+  time in the air is a free subtraction, no new computation needed.
+- Stations used vs. registered: Result.station_breakdown already records
+  which stations were "used" vs. rejected as outliers (Phase 6) - a
+  "3 of 4 stations agreed" confidence indicator is just reading data
+  that's already being stored.
+- Per-station spread/agreement: same station_breakdown already has each
+  station's own independent single-station estimate alongside the fused
+  number - the spread between them is a natural "how confident are we in
+  this number" signal, and doubles as the "how close was I" station-side
+  feature from the original brainstorm doc.
+- Session leaderboard: across a day's launches (all in Launch History
+  already), trivial to compute: best altitude of the day, most consistent
+  rocket (lowest variance across repeat launches of the same named
+  rocket, now that launches can be named), most launches by one design,
+  etc. All just queries over data already in Postgres.
+
+
+WOULD NEED THE PIPELINE TO KEEP MORE (not just max height)
+==============================================================
+Currently `triangulate()` computes a height(t) list, takes the max, and
+discards the rest - including the full x/y/z position at every timestamp
+in the multi-station case. Retaining that (or re-deriving it) unlocks a
+much richer set of numbers:
+
+- Time to apogee: how many seconds after launch the peak height was hit -
+  a real signal of motor/pressure performance (fast climb = strong
+  launch), and distinguishable from hangtime/descent.
+- Ascent rate / vertical speed profile: the derivative of height(t) during
+  ascent - peak climb rate right off the pad is a nice, comparable
+  performance number between rocket designs.
+- Descent rate: same derivative, but during the fall - directly useful for
+  judging recovery system performance (a streamer/chute that's too small
+  shows up immediately as a too-fast descent rate).
+- Horizontal drift distance & landing spot estimate: multi-station
+  triangulation already gives real (x, y) position, not just height - so
+  we can estimate how far laterally the rocket drifted from the pad by
+  landing, and even guess an actual landing location relative to the pad.
+  This is genuinely useful for recovery ("go look about 150 ft northeast
+  of the pad"), not just a nice-to-have stat.
+- Wind drift direction: the bearing of that horizontal drift is a rough
+  proxy for wind direction during the flight - pairs naturally with the
+  "log wind speed/temp" extra from the original brainstorm doc, if that
+  ever gets built.
+- Animated flight-path replay: not a number, but the most fun use of this
+  - since we'd already have the reconstructed (t, x, y, z) trajectory, a
+  simple animated replay on /control after each launch (an idea already on
+  the original extras list) becomes very achievable.
+
+
+PROBABLY TOO NOISY TO TRUST (mentioning so it's ruled out on purpose)
+========================================================================
+- Acceleration / G-force estimates: this would mean differentiating the
+  height curve twice (position -> velocity -> acceleration), which
+  amplifies whatever angle noise is already in the raw sensor data
+  substantially. Doable in principle, but the number that comes out would
+  likely bounce around too much to mean anything without much heavier
+  smoothing than we do today - flagging this as a "probably not worth it"
+  rather than recommending it.
+
+
+HOW THIS WOULD SHOW UP
+-------------------------
+Most of these would naturally live in two places that already exist:
+Result.station_breakdown (already a JSON blob, easy to extend with more
+fields without a schema change) for the per-launch numbers, and the
+Launch History table on /control for anything worth comparing across a
+whole session. None of this requires new sensor capability on the phones
+- it's entirely about keeping/computing more from data we already collect.

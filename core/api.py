@@ -6,6 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .altitude import compute_result_for_launch
+from .debrief import build_debrief
 from .models import Launch, Sample, Session, Station
 from .realtime import broadcast_session_state
 from .serializers import (
@@ -88,6 +89,15 @@ class LaunchMarkLandedView(APIView):
         launch.save()
         broadcast_session_state(launch.session_id)
         return Response(LaunchSerializer(launch).data, status=status.HTTP_200_OK)
+
+
+class LaunchDebriefView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, launch_id):
+        launch = get_object_or_404(Launch, pk=launch_id)
+        return Response(build_debrief(launch))
 
 
 class StationRecalibrateView(APIView):
