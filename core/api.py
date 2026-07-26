@@ -6,7 +6,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .altitude import compute_result_for_launch
-from .debrief import build_debrief
+from .debrief import build_debrief, build_session_comparison
 from .models import Launch, Sample, Session, Station
 from .realtime import broadcast_session_state
 from .serializers import (
@@ -98,6 +98,15 @@ class LaunchDebriefView(APIView):
     def get(self, request, launch_id):
         launch = get_object_or_404(Launch, pk=launch_id)
         return Response(build_debrief(launch))
+
+
+class SessionComparisonView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, session_id):
+        session = get_object_or_404(Session, pk=session_id)
+        return Response(build_session_comparison(session))
 
 
 class StationRecalibrateView(APIView):

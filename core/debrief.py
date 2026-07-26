@@ -1,7 +1,7 @@
 import math
 
 from .altitude import _single_station_estimate
-from .models import Launch
+from .models import Launch, Session
 from .triangulation import GRID_STEP_MS, station_ground_position, triangulate
 
 
@@ -155,3 +155,43 @@ def build_debrief(launch: Launch) -> dict:
         }
     )
     return base
+
+
+def build_session_comparison(session: Session) -> dict:
+    """Aggregates build_debrief() across every launch in a session that has
+    data - reuses its math entirely rather than recomputing anything, so
+    there's exactly one place that understands how to turn Samples into
+    stats/trajectories."""
+    rows = []
+    for launch in session.launches.order_by("number").all():
+        debrief = build_debrief(launch)
+        if debrief["method"] is None:
+            continue
+
+        stats = debrief["stats"] or {}
+        landing = stats.get("landing_estimate") or {}
+
+        if debrief["method"] == "multi_station":
+            height_series = [{"t": p["t"], "height": p["z"]} for p in debrief["trajectory_3d"]]
+        else:
+            height_series = debrief["trajectory_2d"]
+
+        rows.append(
+            {
+                "id": debrief["launch"]["id"],
+                "number": debrief["launch"]["number"],
+                "name": debrief["launch"]["name"],
+                "method": debrief["method"],
+                "best_altitude_ft": debrief["best_altitude_ft"],
+                "time_to_apogee_s": stats.get("time_to_apogee_s"),
+                "flight_duration_s": stats.get("flight_duration_s"),
+                "ascent_rate_max_ft_s": stats.get("ascent_rate_max_ft_s"),
+                "descent_rate_max_ft_s": stats.get("descent_rate_max_ft_s"),
+                "drift_at_apogee_ft": stats.get("drift_at_apogee_ft"),
+                "landing_distance_ft": landing.get("distance_ft"),
+                "landing_bearing_deg": landing.get("bearing_deg"),
+                "height_series": height_series,
+            }
+        )
+
+    return {"launches": rows}

@@ -23,6 +23,7 @@ from core.api import (
     LaunchMarkLandedView,
     LaunchMarkLaunchedView,
     SampleUploadView,
+    SessionComparisonView,
     SessionCreateView,
     StationListCreateView,
     StationRecalibrateView,
@@ -66,6 +67,11 @@ urlpatterns = [
         name='api-launch-debrief',
     ),
     path('api/samples/', SampleUploadView.as_view(), name='api-sample-upload'),
+    path(
+        'api/sessions/<int:session_id>/comparison/',
+        SessionComparisonView.as_view(),
+        name='api-session-comparison',
+    ),
     path(
         'api/stations/recalibrate/',
         StationRecalibrateView.as_view(),
