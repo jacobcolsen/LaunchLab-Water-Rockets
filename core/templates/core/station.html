@@ -97,12 +97,14 @@
     #upload-status .btn { margin-top: 0.5rem; width: 100%; }
     #altitude-result { margin-top: 0.5rem; }
 
-    /* --- Countdown overlay, mirrored from /control - sits above the HUD
-       but never blocks the crosshair/camera, and doesn't intercept taps --- */
+    /* --- Countdown overlay, mirrored from /control - a banner well above
+       the crosshair, never over screen-center, so the rocket is always
+       trackable through liftoff (the moment it matters most). Doesn't
+       intercept taps. --- */
     #station-countdown {
-      position: fixed; inset: 0; z-index: 20; display: none; align-items: center;
-      justify-content: center; pointer-events: none;
-      font-size: 7rem; font-weight: 800; color: var(--accent-orange);
+      position: fixed; top: 11rem; left: 50%; transform: translateX(-50%); z-index: 20;
+      display: none; text-align: center; pointer-events: none;
+      font-size: 4.5rem; font-weight: 800; color: var(--accent-orange);
       text-shadow: 0 0 40px var(--accent-orange-glow);
     }
   </style>
@@ -226,7 +228,7 @@
 
     async function runStationCountdown() {
       const el = document.getElementById('station-countdown');
-      el.style.display = 'flex';
+      el.style.display = 'block';
       for (let n = 5; n >= 1; n--) {
         el.textContent = n;
         beep(440, 150);
