@@ -36,6 +36,25 @@
     #launch-result { margin-top: 0.85rem; }
 
     #new-launch-day-btn { white-space: nowrap; }
+
+    tr[data-launch-id] { cursor: pointer; }
+    tr[data-launch-id]:hover { background: rgba(255,255,255,0.04); }
+
+    #debrief-modal { align-items: flex-start; overflow-y: auto; padding: 2rem 1rem 4rem; }
+    #debrief-modal .confirm-box { max-width: 760px; width: 100%; text-align: left; }
+    #debrief-modal h2 { margin: 0; font-size: 1.3rem; text-transform: none; letter-spacing: normal; color: var(--text-primary); }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+    .stat-grid > div { background: var(--surface-elevated); border-radius: 12px; padding: 0.6rem 0.75rem; }
+    .stat-label { display: block; font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+    .stat-value { display: block; font-size: 1.15rem; font-weight: 700; margin-top: 0.15rem; }
+    .debrief-section-title { margin-top: 1.5rem; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .debrief-limitations { margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 12px; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); font-size: 0.9rem; }
+    #debrief-3d-canvas, #debrief-2d-canvas { width: 100%; border-radius: 12px; background: #05070d; touch-action: none; margin-top: 0.5rem; }
+    .debrief-controls-row { display: flex; gap: 1rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
+    .debrief-controls-row input[type="range"] { flex: 1; min-width: 100px; }
+    .debrief-camera-row { display: flex; gap: 1rem; margin-top: 0.75rem; flex-wrap: wrap; }
+    .debrief-camera-row label { flex: 1; min-width: 140px; font-size: 0.8rem; color: var(--text-muted); }
+    .debrief-camera-row input[type="range"] { width: 100%; }
   </style>
 </head>
 <body>
@@ -105,6 +124,16 @@
         <p>Start a new Launch Day? This won't delete anything — old sessions stay saved, you'll just start fresh.</p>
         <button type="button" id="new-launch-day-yes" class="btn btn-danger">Yes, Start Fresh</button>
         <button type="button" id="new-launch-day-cancel" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+
+    <div id="debrief-modal" class="confirm-overlay">
+      <div class="confirm-box card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 id="debrief-title">Launch Debrief</h2>
+          <button type="button" id="debrief-close-btn" class="btn-icon">✕</button>
+        </div>
+        <div id="debrief-body"></div>
       </div>
     </div>
   {% endif %}
@@ -316,7 +345,7 @@
         body.innerHTML = launches.map((l) => {
           const [badgeClass, badgeText] = statusBadge[l.status] || ['badge-muted', l.status];
           return `
-          <tr>
+          <tr data-launch-id="${l.id}">
             <td>#${l.number}</td>
             <td>${l.name ? escapeHtml(l.name) : '—'}</td>
             <td><span class="badge ${badgeClass}">${badgeText}</span></td>
@@ -329,6 +358,301 @@
       async function fetchRoster() {
         const res = await fetch(`/api/sessions/${sessionId}/stations/`);
         renderRoster(await res.json());
+      }
+
+      // --- Launch Debrief: recreated trajectory + stats, on click from history ---
+      const REPLAY_DURATION_MS = 7000;
+      let debriefTrajectory = null;
+      let debriefStations = null;
+      let debriefScrub = 0; // 0-100
+      let debriefPlaying = false;
+      let debriefAnimFrame = null;
+
+      document.getElementById('history-body').addEventListener('click', (e) => {
+        const row = e.target.closest('tr[data-launch-id]');
+        if (row) openDebrief(row.dataset.launchId);
+      });
+
+      document.getElementById('debrief-close-btn').addEventListener('click', () => {
+        stopDebriefAnimation();
+        document.getElementById('debrief-modal').style.display = 'none';
+      });
+
+      function fmt(n, digits = 1) {
+        return (n === null || n === undefined) ? '—' : Number(n).toFixed(digits);
+      }
+
+      async function openDebrief(launchId) {
+        document.getElementById('debrief-modal').style.display = 'flex';
+        document.getElementById('debrief-title').textContent = 'Launch Debrief';
+        document.getElementById('debrief-body').innerHTML = '<p class="hint">Loading…</p>';
+        const res = await fetch(`/api/launches/${launchId}/debrief/`);
+        renderDebrief(await res.json());
+      }
+
+      function renderDebrief(debrief) {
+        document.getElementById('debrief-title').textContent =
+          `Launch #${debrief.launch.number}${debrief.launch.name ? ' — ' + debrief.launch.name : ''}`;
+
+        const bodyEl = document.getElementById('debrief-body');
+
+        if (!debrief.method) {
+          bodyEl.innerHTML = `<p class="hint">${escapeHtml(debrief.limitations[0] || 'No data available yet.')}</p>`;
+          return;
+        }
+
+        const limitationsHtml = debrief.limitations.length
+          ? `<div class="debrief-limitations">${debrief.limitations.map(escapeHtml).join('<br>')}</div>`
+          : '';
+
+        if (debrief.method === 'single_station') {
+          bodyEl.innerHTML = `
+            <div class="stat-grid">
+              <div><span class="stat-label">Best Altitude</span><span class="stat-value">${fmt(debrief.best_altitude_ft)} ft</span></div>
+              <div><span class="stat-label">Flight Duration</span><span class="stat-value">${fmt(debrief.stats.flight_duration_s)} s</span></div>
+            </div>
+            ${limitationsHtml}
+            <div class="debrief-section-title">Height Over Time (single station)</div>
+            <canvas id="debrief-2d-canvas" width="680" height="280"></canvas>
+          `;
+          draw2DChart(debrief.trajectory_2d);
+          return;
+        }
+
+        const stats = debrief.stats;
+        const breakdownHtml = Object.entries(debrief.station_breakdown).map(([label, info]) => `
+          <div style="display:flex; justify-content:space-between; padding:0.35rem 0; border-bottom:1px solid var(--border);">
+            <span>${escapeHtml(label)}</span>
+            <span>${fmt(info.single_station_estimate_ft)} ft &nbsp; <span class="badge ${info.used ? 'badge-green' : 'badge-red'}">${info.used ? 'used' : 'excluded'}</span></span>
+          </div>
+        `).join('');
+
+        bodyEl.innerHTML = `
+          <div class="stat-grid">
+            <div><span class="stat-label">Best Altitude</span><span class="stat-value">${fmt(debrief.best_altitude_ft)} ft</span></div>
+            <div><span class="stat-label">Time to Apogee</span><span class="stat-value">${fmt(stats.time_to_apogee_s)} s</span></div>
+            <div><span class="stat-label">Flight Duration</span><span class="stat-value">${fmt(stats.flight_duration_s)} s</span></div>
+            <div><span class="stat-label">Ascent Rate</span><span class="stat-value">${fmt(stats.ascent_rate_max_ft_s)} ft/s</span></div>
+            <div><span class="stat-label">Descent Rate</span><span class="stat-value">${fmt(stats.descent_rate_max_ft_s)} ft/s</span></div>
+            <div><span class="stat-label">Drift at Apogee</span><span class="stat-value">${fmt(stats.drift_at_apogee_ft)} ft</span></div>
+            <div><span class="stat-label">Landing Estimate</span><span class="stat-value">${fmt(stats.landing_estimate.distance_ft)} ft @ ${fmt(stats.landing_estimate.bearing_deg, 0)}°</span></div>
+          </div>
+          <div class="debrief-section-title">Station Breakdown</div>
+          ${breakdownHtml}
+          ${limitationsHtml}
+          <div class="debrief-section-title">Recreated Trajectory</div>
+          <canvas id="debrief-3d-canvas" width="680" height="440"></canvas>
+          <div class="debrief-controls-row">
+            <button type="button" id="debrief-play-btn" class="btn btn-secondary">▶ Play</button>
+            <input type="range" id="debrief-scrub" min="0" max="100" value="0">
+          </div>
+          <div class="debrief-camera-row">
+            <label>View Azimuth
+              <input type="range" id="debrief-view-az" min="0" max="360" value="45">
+            </label>
+            <label>View Elevation
+              <input type="range" id="debrief-view-el" min="5" max="85" value="30">
+            </label>
+          </div>
+        `;
+
+        debriefTrajectory = debrief.trajectory_3d;
+        debriefStations = debrief.stations;
+        debriefScrub = 0;
+        debriefPlaying = false;
+        setupDebrief3DControls();
+        draw3DScene(0);
+      }
+
+      function vecCross(a, b) {
+        return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+      }
+      function vecDot(a, b) {
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+      }
+      function vecNormalize(v) {
+        const len = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / len, v[1] / len, v[2] / len];
+      }
+
+      function setupDebrief3DControls() {
+        const azEl = document.getElementById('debrief-view-az');
+        const elEl = document.getElementById('debrief-view-el');
+        const scrubEl = document.getElementById('debrief-scrub');
+        const playBtn = document.getElementById('debrief-play-btn');
+
+        const redraw = () => draw3DScene(debriefScrub / 100);
+        azEl.addEventListener('input', redraw);
+        elEl.addEventListener('input', redraw);
+        scrubEl.addEventListener('input', () => {
+          debriefScrub = parseFloat(scrubEl.value);
+          stopDebriefAnimation();
+          playBtn.textContent = '▶ Play';
+          redraw();
+        });
+
+        playBtn.addEventListener('click', () => {
+          if (debriefPlaying) {
+            stopDebriefAnimation();
+            playBtn.textContent = '▶ Play';
+          } else {
+            if (debriefScrub >= 100) debriefScrub = 0;
+            playDebriefAnimation();
+            playBtn.textContent = '⏸ Pause';
+          }
+        });
+      }
+
+      function playDebriefAnimation() {
+        debriefPlaying = true;
+        const startTime = performance.now() - (debriefScrub / 100) * REPLAY_DURATION_MS;
+        function step(now) {
+          if (!debriefPlaying) return;
+          const elapsed = now - startTime;
+          debriefScrub = Math.min(100, (elapsed / REPLAY_DURATION_MS) * 100);
+          document.getElementById('debrief-scrub').value = debriefScrub;
+          draw3DScene(debriefScrub / 100);
+          if (debriefScrub >= 100) {
+            debriefPlaying = false;
+            document.getElementById('debrief-play-btn').textContent = '▶ Play';
+            return;
+          }
+          debriefAnimFrame = requestAnimationFrame(step);
+        }
+        debriefAnimFrame = requestAnimationFrame(step);
+      }
+
+      function stopDebriefAnimation() {
+        debriefPlaying = false;
+        if (debriefAnimFrame) cancelAnimationFrame(debriefAnimFrame);
+        debriefAnimFrame = null;
+      }
+
+      function draw3DScene(progress) {
+        const canvas = document.getElementById('debrief-3d-canvas');
+        if (!canvas || !debriefTrajectory || debriefTrajectory.length === 0) return;
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+
+        const viewAz = parseFloat(document.getElementById('debrief-view-az').value) * Math.PI / 180;
+        const viewEl = parseFloat(document.getElementById('debrief-view-el').value) * Math.PI / 180;
+
+        // Camera position direction (same spherical convention as the
+        // backend's ray_direction: az measured clockwise from north/+y).
+        const camDir = [Math.cos(viewEl) * Math.sin(viewAz), Math.cos(viewEl) * Math.cos(viewAz), Math.sin(viewEl)];
+        const worldUp = [0, 0, 1];
+        const right = vecNormalize(vecCross(worldUp, camDir));
+        const upCam = vecNormalize(vecCross(camDir, right));
+
+        const maxExtent = Math.max(
+          10,
+          ...debriefTrajectory.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y), Math.abs(p.z))),
+          ...(debriefStations || []).map((s) => Math.max(Math.abs(s.x), Math.abs(s.y)))
+        );
+        const scale = (Math.min(W, H) / 2 - 30) / maxExtent;
+
+        const proj = (p) => ({
+          x: W / 2 + vecDot(right, [p.x, p.y, p.z]) * scale,
+          y: H / 2 - vecDot(upCam, [p.x, p.y, p.z]) * scale,
+        });
+
+        // Ground reference circle
+        ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        const gridSteps = 32;
+        for (let i = 0; i <= gridSteps; i++) {
+          const t = (i / gridSteps) * Math.PI * 2;
+          const gp = proj({ x: maxExtent * Math.cos(t), y: maxExtent * Math.sin(t), z: 0 });
+          if (i === 0) ctx.moveTo(gp.x, gp.y); else ctx.lineTo(gp.x, gp.y);
+        }
+        ctx.stroke();
+
+        // Pad marker
+        const padP = proj({ x: 0, y: 0, z: 0 });
+        ctx.fillStyle = '#ff7a29';
+        ctx.beginPath();
+        ctx.arc(padP.x, padP.y, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Station markers
+        ctx.fillStyle = '#2dd4ee';
+        (debriefStations || []).forEach((s) => {
+          const sp = proj({ x: s.x, y: s.y, z: 0 });
+          ctx.beginPath();
+          ctx.arc(sp.x, sp.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        // Trajectory path
+        ctx.strokeStyle = '#34d399';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        debriefTrajectory.forEach((p, i) => {
+          const sp = proj(p);
+          if (i === 0) ctx.moveTo(sp.x, sp.y); else ctx.lineTo(sp.x, sp.y);
+        });
+        ctx.stroke();
+
+        // Animated marker + drop-line to ground for height context
+        const idx = Math.min(debriefTrajectory.length - 1, Math.floor(progress * (debriefTrajectory.length - 1)));
+        const cur = debriefTrajectory[idx];
+        const curP = proj(cur);
+        const groundP = proj({ x: cur.x, y: cur.y, z: 0 });
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(curP.x, curP.y);
+        ctx.lineTo(groundP.x, groundP.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.font = '22px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('🚀', curP.x, curP.y);
+        ctx.textAlign = 'start';
+        ctx.textBaseline = 'alphabetic';
+      }
+
+      function draw2DChart(trajectory2d) {
+        const canvas = document.getElementById('debrief-2d-canvas');
+        if (!canvas || !trajectory2d || trajectory2d.length === 0) return;
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+
+        const maxT = Math.max(...trajectory2d.map((p) => p.t)) || 1;
+        const maxH = Math.max(...trajectory2d.map((p) => p.height)) || 1;
+        const padding = 32;
+        const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
+        const yAt = (h) => H - padding - (h / maxH) * (H - padding * 2);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding, H - padding);
+        ctx.lineTo(W - padding, H - padding);
+        ctx.moveTo(padding, padding);
+        ctx.lineTo(padding, H - padding);
+        ctx.stroke();
+
+        ctx.strokeStyle = '#2dd4ee';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        trajectory2d.forEach((p, i) => {
+          const x = xAt(p.t), y = yAt(p.height);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+
+        ctx.fillStyle = '#93a0b8';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('0s', padding, H - padding + 16);
+        ctx.fillText(`${maxT.toFixed(1)}s`, W - padding - 24, H - padding + 16);
+        ctx.fillText(`${maxH.toFixed(0)}ft`, padding + 4, padding + 4);
       }
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
