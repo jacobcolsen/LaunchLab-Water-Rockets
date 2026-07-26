@@ -40,18 +40,25 @@
     tr[data-launch-id] { cursor: pointer; }
     tr[data-launch-id]:hover { background: rgba(255,255,255,0.04); }
 
-    #debrief-modal { align-items: flex-start; overflow-y: auto; padding: 2rem 1rem 4rem; }
+    #debrief-modal, #comparison-modal { align-items: flex-start; overflow-y: auto; padding: 2rem 1rem 4rem; }
     #debrief-modal .confirm-box { max-width: 760px; width: 100%; text-align: left; }
-    #debrief-modal h2 { margin: 0; font-size: 1.3rem; text-transform: none; letter-spacing: normal; color: var(--text-primary); }
+    #comparison-modal .confirm-box { max-width: 900px; width: 100%; text-align: left; }
+    #debrief-modal h2, #comparison-modal h2 { margin: 0; font-size: 1.3rem; text-transform: none; letter-spacing: normal; color: var(--text-primary); }
     .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
     .stat-grid > div { background: var(--surface-elevated); border-radius: 12px; padding: 0.6rem 0.75rem; }
     .stat-label { display: block; font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
     .stat-value { display: block; font-size: 1.15rem; font-weight: 700; margin-top: 0.15rem; }
     .debrief-section-title { margin-top: 1.5rem; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
     .debrief-limitations { margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 12px; background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); font-size: 0.9rem; }
-    #debrief-3d-canvas, #debrief-2d-canvas { width: 100%; border-radius: 12px; background: #05070d; touch-action: none; margin-top: 0.5rem; }
+    #debrief-3d-canvas, #debrief-2d-canvas, #comparison-overlay-canvas, #comparison-bar-canvas {
+      width: 100%; border-radius: 12px; background: #05070d; touch-action: none; margin-top: 0.5rem;
+    }
     .debrief-controls-row { display: flex; gap: 1rem; align-items: center; margin-top: 0.75rem; flex-wrap: wrap; }
     .debrief-controls-row input[type="range"] { flex: 1; min-width: 100px; }
+    #comparison-metric-select { margin-top: 0.75rem; width: 100%; }
+    #comparison-table th { cursor: pointer; user-select: none; white-space: nowrap; }
+    #comparison-table th:hover { color: var(--text-primary); }
+    #comparison-table td { white-space: nowrap; }
     .debrief-camera-row { display: flex; gap: 1rem; margin-top: 0.75rem; flex-wrap: wrap; }
     .debrief-camera-row label { flex: 1; min-width: 140px; font-size: 0.8rem; color: var(--text-muted); }
     .debrief-camera-row input[type="range"] { width: 100%; }
@@ -108,7 +115,10 @@
     </div>
 
     <div class="card">
-      <h2>Launch History</h2>
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h2 style="margin:0;">Launch History</h2>
+        <button type="button" id="compare-launches-btn" class="btn btn-secondary">📊 Compare Launches</button>
+      </div>
       <table>
         <thead>
           <tr><th>#</th><th>Name</th><th>Status</th><th>Best Altitude</th></tr>
@@ -134,6 +144,16 @@
           <button type="button" id="debrief-close-btn" class="btn-icon">✕</button>
         </div>
         <div id="debrief-body"></div>
+      </div>
+    </div>
+
+    <div id="comparison-modal" class="confirm-overlay">
+      <div class="confirm-box card" style="max-width: 900px;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2>Compare Launches</h2>
+          <button type="button" id="comparison-close-btn" class="btn-icon">✕</button>
+        </div>
+        <div id="comparison-body"></div>
       </div>
     </div>
   {% endif %}
@@ -653,6 +673,216 @@
         ctx.fillText('0s', padding, H - padding + 16);
         ctx.fillText(`${maxT.toFixed(1)}s`, W - padding - 24, H - padding + 16);
         ctx.fillText(`${maxH.toFixed(0)}ft`, padding + 4, padding + 4);
+      }
+
+      // --- Compare Launches: cross-session stats + overlaid trajectories ---
+      const COMPARISON_METRICS = [
+        { key: 'best_altitude_ft', label: 'Best Altitude', unit: ' ft' },
+        { key: 'time_to_apogee_s', label: 'Time to Apogee', unit: ' s' },
+        { key: 'flight_duration_s', label: 'Flight Duration', unit: ' s' },
+        { key: 'ascent_rate_max_ft_s', label: 'Ascent Rate', unit: ' ft/s' },
+        { key: 'descent_rate_max_ft_s', label: 'Descent Rate', unit: ' ft/s' },
+        { key: 'drift_at_apogee_ft', label: 'Drift at Apogee', unit: ' ft' },
+        { key: 'landing_distance_ft', label: 'Landing Distance', unit: ' ft' },
+      ];
+      const COMPARISON_PALETTE = ['#34d399', '#2dd4ee', '#ff7a29', '#fbbf24', '#f87171', '#a78bfa', '#f472b6'];
+
+      let comparisonData = null;
+      let comparisonSortKey = 'best_altitude_ft';
+      let comparisonSortDir = -1;
+
+      document.getElementById('compare-launches-btn').addEventListener('click', openComparison);
+      document.getElementById('comparison-close-btn').addEventListener('click', () => {
+        document.getElementById('comparison-modal').style.display = 'none';
+      });
+
+      async function openComparison() {
+        document.getElementById('comparison-modal').style.display = 'flex';
+        document.getElementById('comparison-body').innerHTML = '<p class="hint">Loading…</p>';
+        const res = await fetch(`/api/sessions/${sessionId}/comparison/`);
+        comparisonData = await res.json();
+        renderComparison();
+      }
+
+      function renderComparison() {
+        const bodyEl = document.getElementById('comparison-body');
+        if (!comparisonData.launches.length) {
+          bodyEl.innerHTML = '<p class="hint">No launches with data yet this session.</p>';
+          return;
+        }
+
+        const metricOptions = COMPARISON_METRICS.map((m) => `<option value="${m.key}">${m.label}</option>`).join('');
+
+        bodyEl.innerHTML = `
+          <div class="debrief-section-title">Height Over Time (all launches)</div>
+          <canvas id="comparison-overlay-canvas" width="820" height="360"></canvas>
+          <div class="debrief-section-title">Compare a Metric</div>
+          <select id="comparison-metric-select">${metricOptions}</select>
+          <canvas id="comparison-bar-canvas" width="820" height="200"></canvas>
+          <div class="debrief-section-title">All Launches</div>
+          <div style="overflow-x:auto;">
+            <table id="comparison-table">
+              <thead>
+                <tr>
+                  <th data-key="number">#</th>
+                  <th data-key="name">Name</th>
+                  <th data-key="method">Method</th>
+                  <th data-key="best_altitude_ft">Altitude</th>
+                  <th data-key="time_to_apogee_s">Apogee</th>
+                  <th data-key="flight_duration_s">Duration</th>
+                  <th data-key="ascent_rate_max_ft_s">Ascent</th>
+                  <th data-key="descent_rate_max_ft_s">Descent</th>
+                  <th data-key="drift_at_apogee_ft">Drift</th>
+                  <th data-key="landing_distance_ft">Landing</th>
+                </tr>
+              </thead>
+              <tbody id="comparison-table-body"></tbody>
+            </table>
+          </div>
+        `;
+
+        drawOverlayChart(comparisonData.launches);
+
+        const metricSelect = document.getElementById('comparison-metric-select');
+        metricSelect.addEventListener('change', () => drawBarChart(metricSelect.value));
+        drawBarChart(metricSelect.value);
+
+        document.querySelectorAll('#comparison-table th').forEach((th) => {
+          th.addEventListener('click', () => {
+            const key = th.dataset.key;
+            if (comparisonSortKey === key) {
+              comparisonSortDir *= -1;
+            } else {
+              comparisonSortKey = key;
+              comparisonSortDir = -1;
+            }
+            renderComparisonTable();
+          });
+        });
+        renderComparisonTable();
+      }
+
+      function renderComparisonTable() {
+        const rows = [...comparisonData.launches].sort((a, b) => {
+          const av = a[comparisonSortKey];
+          const bv = b[comparisonSortKey];
+          if (av === null || av === undefined) return 1;
+          if (bv === null || bv === undefined) return -1;
+          if (av < bv) return -1 * comparisonSortDir;
+          if (av > bv) return 1 * comparisonSortDir;
+          return 0;
+        });
+
+        const fmtCell = (v, digits = 1) => (v === null || v === undefined) ? '—' : Number(v).toFixed(digits);
+
+        document.getElementById('comparison-table-body').innerHTML = rows.map((l) => `
+          <tr>
+            <td>#${l.number}</td>
+            <td>${l.name ? escapeHtml(l.name) : '—'}</td>
+            <td>${l.method === 'multi_station' ? 'multi' : 'single'}</td>
+            <td>${fmtCell(l.best_altitude_ft)} ft</td>
+            <td>${fmtCell(l.time_to_apogee_s)}</td>
+            <td>${fmtCell(l.flight_duration_s)}</td>
+            <td>${fmtCell(l.ascent_rate_max_ft_s)}</td>
+            <td>${fmtCell(l.descent_rate_max_ft_s)}</td>
+            <td>${fmtCell(l.drift_at_apogee_ft)}</td>
+            <td>${fmtCell(l.landing_distance_ft)}</td>
+          </tr>
+        `).join('');
+      }
+
+      function drawOverlayChart(launches) {
+        const canvas = document.getElementById('comparison-overlay-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+
+        const withSeries = launches.filter((l) => l.height_series && l.height_series.length > 0);
+        if (withSeries.length === 0) return;
+
+        const maxT = Math.max(...withSeries.flatMap((l) => l.height_series.map((p) => p.t))) || 1;
+        const maxH = Math.max(...withSeries.flatMap((l) => l.height_series.map((p) => p.height))) || 1;
+        const padding = 36;
+        const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
+        const yAt = (h) => H - padding - (h / maxH) * (H - padding * 2);
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding, H - padding); ctx.lineTo(W - padding, H - padding);
+        ctx.moveTo(padding, padding); ctx.lineTo(padding, H - padding);
+        ctx.stroke();
+
+        withSeries.forEach((l, i) => {
+          const color = COMPARISON_PALETTE[i % COMPARISON_PALETTE.length];
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          l.height_series.forEach((p, j) => {
+            const x = xAt(p.t), y = yAt(p.height);
+            if (j === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.stroke();
+        });
+
+        let legendY = padding;
+        withSeries.forEach((l, i) => {
+          const color = COMPARISON_PALETTE[i % COMPARISON_PALETTE.length];
+          const label = l.name || `#${l.number}`;
+          ctx.fillStyle = color;
+          ctx.fillRect(W - padding - 120, legendY, 10, 10);
+          ctx.fillStyle = '#f5f7fa';
+          ctx.font = '12px sans-serif';
+          ctx.fillText(label, W - padding - 104, legendY + 9);
+          legendY += 16;
+        });
+      }
+
+      function drawBarChart(metricKey) {
+        const canvas = document.getElementById('comparison-bar-canvas');
+        if (!canvas || !comparisonData) return;
+        const metric = COMPARISON_METRICS.find((m) => m.key === metricKey) || COMPARISON_METRICS[0];
+
+        const rows = comparisonData.launches
+          .map((l) => ({ label: l.name || `#${l.number}`, value: l[metric.key] }))
+          .filter((r) => r.value !== null && r.value !== undefined)
+          .sort((a, b) => b.value - a.value);
+
+        const rowHeight = 32;
+        const W = canvas.width;
+        canvas.height = Math.max(80, rows.length * rowHeight + 20);
+        const H = canvas.height;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, W, H);
+
+        if (rows.length === 0) {
+          ctx.fillStyle = '#93a0b8';
+          ctx.font = '13px sans-serif';
+          ctx.fillText('No data for this metric yet.', 12, 24);
+          return;
+        }
+
+        const maxVal = Math.max(...rows.map((r) => r.value)) || 1;
+        const labelWidth = 110;
+        const chartWidth = W - labelWidth - 70;
+
+        rows.forEach((r, i) => {
+          const y = 10 + i * rowHeight;
+          const barW = Math.max(2, (r.value / maxVal) * chartWidth);
+
+          ctx.fillStyle = '#93a0b8';
+          ctx.font = '13px sans-serif';
+          ctx.textAlign = 'right';
+          ctx.fillText(r.label, labelWidth - 8, y + rowHeight * 0.6);
+          ctx.textAlign = 'left';
+
+          ctx.fillStyle = COMPARISON_PALETTE[i % COMPARISON_PALETTE.length];
+          ctx.fillRect(labelWidth, y + 4, barW, rowHeight - 14);
+
+          ctx.fillStyle = '#f5f7fa';
+          ctx.fillText(`${r.value.toFixed(1)}${metric.unit}`, labelWidth + barW + 6, y + rowHeight * 0.6);
+        });
       }
 
       const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
