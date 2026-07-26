@@ -54,6 +54,29 @@
       text-align: center; padding: 2rem;
     }
 
+    #camera-reconnect-banner {
+      position: fixed; top: 8.5rem; left: 50%; transform: translateX(-50%); z-index: 25;
+      display: none; background: rgba(185,28,28,0.9); color: #fff; padding: 0.5rem 1rem;
+      border-radius: 999px; font-size: 0.95rem; text-align: center;
+    }
+    #camera-reconnect-banner button {
+      margin-left: 0.5rem; background: #fff; color: #b91c1c; border: none; border-radius: 6px;
+      padding: 0.3rem 0.6rem; font-size: 0.9rem;
+    }
+
+    #recalibrate-confirm {
+      position: fixed; inset: 0; z-index: 40; display: none; align-items: center;
+      justify-content: center; background: rgba(0,0,0,0.85); padding: 2rem; text-align: center;
+    }
+    #recalibrate-confirm .confirm-box { max-width: 320px; }
+    #recalibrate-confirm p { font-size: 1.2rem; margin-bottom: 1.5rem; }
+    #recalibrate-confirm button {
+      font-size: 1.1rem; padding: 0.75rem 1rem; border-radius: 8px; border: none;
+      width: 100%; margin-top: 0.75rem;
+    }
+    #recalibrate-confirm-yes { background: #b91c1c; color: #fff; }
+    #recalibrate-confirm-cancel { background: #374151; color: #ddd; }
+
     .overlay-panel {
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
       background: rgba(0,0,0,0.7); padding: 1rem 1.25rem 1.5rem;
@@ -107,6 +130,15 @@
       <div id="elevation-readout">--°</div>
       <div id="current-heading">heading: --°</div>
       <div id="landscape-warning">Please rotate your phone to portrait.</div>
+      <div id="camera-reconnect-banner"></div>
+
+      <div id="recalibrate-confirm">
+        <div class="confirm-box">
+          <p>Recalibrate this station? You'll need to re-enter distance and re-aim bearing.</p>
+          <button type="button" id="recalibrate-confirm-yes">Yes, Recalibrate</button>
+          <button type="button" id="recalibrate-confirm-cancel">Cancel</button>
+        </div>
+      </div>
 
       <div id="calibration-overlay" class="overlay-panel">
         <form id="calibration-form">
@@ -203,6 +235,41 @@
     window.matchMedia('(orientation: landscape)').addEventListener('change', updateOrientationWarning);
     window.addEventListener('resize', updateOrientationWarning);
 
+    let reconnectingCamera = false;
+
+    async function startCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+      });
+      document.getElementById('camera-feed').srcObject = stream;
+      stream.getVideoTracks()[0].addEventListener('ended', handleCameraEnded);
+      return stream;
+    }
+
+    async function handleCameraEnded() {
+      if (reconnectingCamera) return;
+      reconnectingCamera = true;
+      const banner = document.getElementById('camera-reconnect-banner');
+      banner.textContent = 'Reconnecting camera…';
+      banner.style.display = 'block';
+      try {
+        await startCamera();
+        banner.style.display = 'none';
+      } catch (err) {
+        banner.innerHTML = 'Camera disconnected. <button id="camera-retry-btn">Tap to reconnect</button>';
+        document.getElementById('camera-retry-btn').addEventListener('click', async () => {
+          try {
+            await startCamera();
+            banner.style.display = 'none';
+          } catch (e) {
+            // still disconnected - button stays, user can tap again
+          }
+        });
+      } finally {
+        reconnectingCamera = false;
+      }
+    }
+
     document.getElementById('enable-btn').addEventListener('click', async () => {
       const errorEl = document.getElementById('permission-error');
       errorEl.style.display = 'none';
@@ -214,10 +281,7 @@
             throw new Error('Motion sensor permission was denied.');
           }
         }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: 'environment' },
-        });
-        document.getElementById('camera-feed').srcObject = stream;
+        await startCamera();
         window.addEventListener('deviceorientation', handleOrientation);
         updateOrientationWarning();
 
@@ -271,9 +335,15 @@
     });
 
     document.getElementById('recalibrate-btn').addEventListener('click', () => {
-      if (!confirm('Recalibrate this station? You\'ll need to re-enter distance and re-aim bearing.')) {
-        return;
-      }
+      document.getElementById('recalibrate-confirm').style.display = 'flex';
+    });
+
+    document.getElementById('recalibrate-confirm-cancel').addEventListener('click', () => {
+      document.getElementById('recalibrate-confirm').style.display = 'none';
+    });
+
+    document.getElementById('recalibrate-confirm-yes').addEventListener('click', () => {
+      document.getElementById('recalibrate-confirm').style.display = 'none';
       const cached = JSON.parse(localStorage.getItem(storageKey));
       isRecalibrating = true;
       document.getElementById('label').value = cached.label;
