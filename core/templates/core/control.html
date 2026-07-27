@@ -59,9 +59,8 @@
     #comparison-table th { cursor: pointer; user-select: none; white-space: nowrap; }
     #comparison-table th:hover { color: var(--text-primary); }
     #comparison-table td { white-space: nowrap; }
-    .debrief-camera-row { display: flex; gap: 1rem; margin-top: 0.75rem; flex-wrap: wrap; }
-    .debrief-camera-row label { flex: 1; min-width: 140px; font-size: 0.8rem; color: var(--text-muted); }
-    .debrief-camera-row input[type="range"] { width: 100%; }
+    #debrief-3d-canvas { cursor: grab; touch-action: none; }
+    #debrief-3d-canvas:active { cursor: grabbing; }
   </style>
 </head>
 <body>
@@ -387,6 +386,13 @@
       let debriefScrub = 0; // 0-100
       let debriefPlaying = false;
       let debriefAnimFrame = null;
+      let debriefViewAz = 45;
+      let debriefViewEl = 30;
+      let debriefZoom = 1.0;
+      let debriefPointers = new Map(); // pointerId -> {x, y}
+      let debriefDragStart = null; // {x, y, az, el} for single-pointer orbit
+      let debriefPinchStartDist = null;
+      let debriefPinchStartZoom = 1.0;
 
       document.getElementById('history-body').addEventListener('click', (e) => {
         const row = e.target.closest('tr[data-launch-id]');
@@ -462,17 +468,10 @@
           ${limitationsHtml}
           <div class="debrief-section-title">Recreated Trajectory</div>
           <canvas id="debrief-3d-canvas" width="680" height="440"></canvas>
+          <p class="hint" style="text-align:center; font-size:0.8rem; margin-top:0.4rem;">Drag to rotate · Pinch or scroll to zoom</p>
           <div class="debrief-controls-row">
             <button type="button" id="debrief-play-btn" class="btn btn-secondary">▶ Play</button>
             <input type="range" id="debrief-scrub" min="0" max="100" value="0">
-          </div>
-          <div class="debrief-camera-row">
-            <label>View Azimuth
-              <input type="range" id="debrief-view-az" min="0" max="360" value="45">
-            </label>
-            <label>View Elevation
-              <input type="range" id="debrief-view-el" min="5" max="85" value="30">
-            </label>
           </div>
         `;
 
@@ -480,6 +479,12 @@
         debriefStations = debrief.stations;
         debriefScrub = 0;
         debriefPlaying = false;
+        debriefViewAz = 45;
+        debriefViewEl = 30;
+        debriefZoom = 1.0;
+        debriefPointers = new Map();
+        debriefDragStart = null;
+        debriefPinchStartDist = null;
         setupDebrief3DControls();
         draw3DScene(0);
       }
@@ -496,14 +501,66 @@
       }
 
       function setupDebrief3DControls() {
-        const azEl = document.getElementById('debrief-view-az');
-        const elEl = document.getElementById('debrief-view-el');
+        const canvas = document.getElementById('debrief-3d-canvas');
         const scrubEl = document.getElementById('debrief-scrub');
         const playBtn = document.getElementById('debrief-play-btn');
 
         const redraw = () => draw3DScene(debriefScrub / 100);
-        azEl.addEventListener('input', redraw);
-        elEl.addEventListener('input', redraw);
+
+        function pinchDistance() {
+          const pts = [...debriefPointers.values()];
+          return Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        }
+
+        canvas.addEventListener('pointerdown', (e) => {
+          canvas.setPointerCapture(e.pointerId);
+          debriefPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+          if (debriefPointers.size === 1) {
+            debriefDragStart = { x: e.clientX, y: e.clientY, az: debriefViewAz, el: debriefViewEl };
+          } else if (debriefPointers.size === 2) {
+            debriefDragStart = null;
+            debriefPinchStartDist = pinchDistance();
+            debriefPinchStartZoom = debriefZoom;
+          }
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+          if (!debriefPointers.has(e.pointerId)) return;
+          debriefPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+          if (debriefPointers.size === 1 && debriefDragStart) {
+            const dx = e.clientX - debriefDragStart.x;
+            const dy = e.clientY - debriefDragStart.y;
+            debriefViewAz = (debriefDragStart.az + dx * 0.5 + 360) % 360;
+            debriefViewEl = Math.max(-85, Math.min(85, debriefDragStart.el - dy * 0.5));
+            redraw();
+          } else if (debriefPointers.size === 2 && debriefPinchStartDist) {
+            const dist = pinchDistance();
+            debriefZoom = Math.max(0.3, Math.min(4, debriefPinchStartZoom * (dist / debriefPinchStartDist)));
+            redraw();
+          }
+        });
+
+        function endPointer(e) {
+          debriefPointers.delete(e.pointerId);
+          if (debriefPointers.size < 2) debriefPinchStartDist = null;
+          if (debriefPointers.size === 1) {
+            const pos = [...debriefPointers.values()][0];
+            debriefDragStart = { x: pos.x, y: pos.y, az: debriefViewAz, el: debriefViewEl };
+          } else if (debriefPointers.size === 0) {
+            debriefDragStart = null;
+          }
+        }
+        canvas.addEventListener('pointerup', endPointer);
+        canvas.addEventListener('pointercancel', endPointer);
+        canvas.addEventListener('pointerleave', endPointer);
+
+        canvas.addEventListener('wheel', (e) => {
+          e.preventDefault();
+          debriefZoom = Math.max(0.3, Math.min(4, debriefZoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+          redraw();
+        }, { passive: false });
+
         scrubEl.addEventListener('input', () => {
           debriefScrub = parseFloat(scrubEl.value);
           stopDebriefAnimation();
@@ -555,8 +612,8 @@
         const W = canvas.width, H = canvas.height;
         ctx.clearRect(0, 0, W, H);
 
-        const viewAz = parseFloat(document.getElementById('debrief-view-az').value) * Math.PI / 180;
-        const viewEl = parseFloat(document.getElementById('debrief-view-el').value) * Math.PI / 180;
+        const viewAz = debriefViewAz * Math.PI / 180;
+        const viewEl = debriefViewEl * Math.PI / 180;
 
         // Camera position direction (same spherical convention as the
         // backend's ray_direction: az measured clockwise from north/+y).
@@ -570,7 +627,7 @@
           ...debriefTrajectory.map((p) => Math.max(Math.abs(p.x), Math.abs(p.y), Math.abs(p.z))),
           ...(debriefStations || []).map((s) => Math.max(Math.abs(s.x), Math.abs(s.y)))
         );
-        const scale = (Math.min(W, H) / 2 - 30) / maxExtent;
+        const scale = ((Math.min(W, H) / 2 - 30) / maxExtent) * debriefZoom;
 
         const proj = (p) => ({
           x: W / 2 + vecDot(right, [p.x, p.y, p.z]) * scale,
@@ -629,12 +686,18 @@
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.font = '22px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('🚀', curP.x, curP.y);
-        ctx.textAlign = 'start';
-        ctx.textBaseline = 'alphabetic';
+        const markerRadius = 7;
+        const gradient = ctx.createRadialGradient(
+          curP.x - markerRadius * 0.35, curP.y - markerRadius * 0.35, 1,
+          curP.x, curP.y, markerRadius
+        );
+        gradient.addColorStop(0, '#fff5e6');
+        gradient.addColorStop(0.5, '#ff9a52');
+        gradient.addColorStop(1, '#c44f12');
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(curP.x, curP.y, markerRadius, 0, Math.PI * 2);
+        ctx.fill();
       }
 
       // Shared axis chart (gridlines, tick numbers, axis titles) for both
