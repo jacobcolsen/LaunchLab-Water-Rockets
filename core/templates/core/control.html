@@ -637,19 +637,9 @@
         ctx.textBaseline = 'alphabetic';
       }
 
-      function draw2DChart(trajectory2d) {
-        const canvas = document.getElementById('debrief-2d-canvas');
-        if (!canvas || !trajectory2d || trajectory2d.length === 0) return;
-        const ctx = canvas.getContext('2d');
-        const W = canvas.width, H = canvas.height;
-        ctx.clearRect(0, 0, W, H);
-
-        const maxT = Math.max(...trajectory2d.map((p) => p.t)) || 1;
-        const maxH = Math.max(...trajectory2d.map((p) => p.height)) || 1;
-        const padding = 32;
-        const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
-        const yAt = (h) => H - padding - (h / maxH) * (H - padding * 2);
-
+      // Shared axis chart (gridlines, tick numbers, axis titles) for both
+      // the single-launch height chart and the cross-launch overlay chart.
+      function drawChartAxes(ctx, { W, H, padding, maxX, maxY, xLabel, yLabel, xUnit, yUnit }) {
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -659,6 +649,63 @@
         ctx.lineTo(padding, H - padding);
         ctx.stroke();
 
+        ctx.font = '11px sans-serif';
+        for (let f = 0; f <= 1.0001; f += 0.25) {
+          // vertical gridlines + x tick labels
+          const x = padding + f * (W - padding * 2);
+          ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+          ctx.beginPath();
+          ctx.moveTo(x, padding);
+          ctx.lineTo(x, H - padding);
+          ctx.stroke();
+          ctx.fillStyle = '#93a0b8';
+          ctx.textAlign = 'center';
+          ctx.fillText(`${(f * maxX).toFixed(1)}${xUnit}`, x, H - padding + 16);
+
+          // horizontal gridlines + y tick labels
+          const y = H - padding - f * (H - padding * 2);
+          ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+          ctx.beginPath();
+          ctx.moveTo(padding, y);
+          ctx.lineTo(W - padding, y);
+          ctx.stroke();
+          ctx.fillStyle = '#93a0b8';
+          ctx.textAlign = 'right';
+          ctx.fillText(`${(f * maxY).toFixed(0)}${yUnit}`, padding - 8, y + 4);
+        }
+
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#c3cbd9';
+        ctx.font = '12px sans-serif';
+        ctx.fillText(xLabel, padding + (W - padding * 2) / 2, H - 8);
+
+        ctx.save();
+        ctx.translate(14, padding + (H - padding * 2) / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText(yLabel, 0, 0);
+        ctx.restore();
+
+        ctx.textAlign = 'left';
+      }
+
+      function draw2DChart(trajectory2d) {
+        const canvas = document.getElementById('debrief-2d-canvas');
+        if (!canvas || !trajectory2d || trajectory2d.length === 0) return;
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+
+        const maxT = Math.max(...trajectory2d.map((p) => p.t)) || 1;
+        const maxH = Math.max(...trajectory2d.map((p) => p.height)) || 1;
+        const padding = 50;
+        const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
+        const yAt = (h) => H - padding - (h / maxH) * (H - padding * 2);
+
+        drawChartAxes(ctx, {
+          W, H, padding, maxX: maxT, maxY: maxH,
+          xLabel: 'Time (s)', yLabel: 'Height (ft)', xUnit: 's', yUnit: 'ft',
+        });
+
         ctx.strokeStyle = '#2dd4ee';
         ctx.lineWidth = 2;
         ctx.beginPath();
@@ -667,12 +714,6 @@
           if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         });
         ctx.stroke();
-
-        ctx.fillStyle = '#93a0b8';
-        ctx.font = '12px sans-serif';
-        ctx.fillText('0s', padding, H - padding + 16);
-        ctx.fillText(`${maxT.toFixed(1)}s`, W - padding - 24, H - padding + 16);
-        ctx.fillText(`${maxH.toFixed(0)}ft`, padding + 4, padding + 4);
       }
 
       // --- Compare Launches: cross-session stats + overlaid trajectories ---
@@ -803,16 +844,14 @@
 
         const maxT = Math.max(...withSeries.flatMap((l) => l.height_series.map((p) => p.t))) || 1;
         const maxH = Math.max(...withSeries.flatMap((l) => l.height_series.map((p) => p.height))) || 1;
-        const padding = 36;
+        const padding = 50;
         const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
         const yAt = (h) => H - padding - (h / maxH) * (H - padding * 2);
 
-        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(padding, H - padding); ctx.lineTo(W - padding, H - padding);
-        ctx.moveTo(padding, padding); ctx.lineTo(padding, H - padding);
-        ctx.stroke();
+        drawChartAxes(ctx, {
+          W, H, padding, maxX: maxT, maxY: maxH,
+          xLabel: 'Time (s)', yLabel: 'Height (ft)', xUnit: 's', yUnit: 'ft',
+        });
 
         withSeries.forEach((l, i) => {
           const color = COMPARISON_PALETTE[i % COMPARISON_PALETTE.length];
