@@ -12,6 +12,7 @@ from .optical_camera import (
     solve_boresight_from_tap,
 )
 from .optical_mock import (
+    FRAME_RATE_HZ,
     NUM_DROPPED_FRAMES_PER_STATION,
     STATION_CLOCK_OFFSETS_MS,
     flight_duration_s,
@@ -25,8 +26,10 @@ from .optical_models import (
     TrackingFlight,
     TrackingSession,
     TrackingStation,
+    TriangulatedPoint,
 )
 from .optical_rays import _interp_bearing_series, generate_rays_for_flight
+from .optical_triangulation import _residual, _solve_point, triangulate_flight
 
 
 def _calibration(facing_deg=0.0, pitch_deg=0.0, roll_deg=0.0, width=1920, height=1080, fov_h=60.0, fov_v=34.0):
@@ -600,6 +603,44 @@ class OpticalClockSyncApiTests(TestCase):
         self.assertEqual(frame1.synchronized_timestamp_ms, 1283)
 
 
+def _facing_pitch_toward(station_position, target_position):
+    """facing_deg/pitch_deg that aims a station's boresight exactly at
+    target_position - same derivation optical_mock.py uses to aim its
+    synthetic stations at the pad."""
+    dx = target_position[0] - station_position[0]
+    dy = target_position[1] - station_position[1]
+    dz = target_position[2] - station_position[2]
+    facing_deg = math.degrees(math.atan2(dx, dy)) % 360
+    pitch_deg = math.degrees(math.atan2(dz, math.hypot(dx, dy)))
+    return facing_deg, pitch_deg
+
+
+def _make_station_aimed_at(session, label, index, position, aim_point):
+    station = TrackingStation.objects.create(
+        session=session,
+        label=label,
+        station_index=index,
+        position_source=TrackingStation.SOURCE_MOCK,
+        surveyed_x_m=position[0],
+        surveyed_y_m=position[1],
+        surveyed_z_m=position[2],
+    )
+    facing_deg, pitch_deg = _facing_pitch_toward(position, aim_point)
+    StationCalibration.objects.create(
+        station=station,
+        image_width_px=1920,
+        image_height_px=1080,
+        fov_horizontal_deg=60.0,
+        fov_vertical_deg=34.0,
+        facing_deg=facing_deg,
+        pitch_deg=pitch_deg,
+        roll_deg=0.0,
+        orientation_source=StationCalibration.ORIENTATION_SENSOR,
+        is_active=True,
+    )
+    return station
+
+
 def _make_tracking_station(session, label, index, x, y, z):
     station = TrackingStation.objects.create(
         session=session,
@@ -760,3 +801,192 @@ class GenerateRaysForMockFlightTests(TestCase):
             cos_angle = np.clip(np.dot(direction, expected_direction), -1.0, 1.0)
             angle_deg = math.degrees(math.acos(cos_angle))
             self.assertLess(angle_deg, 2.0, station.label)
+
+
+class SolvePointAndResidualTests(TestCase):
+    def test_two_rays_crossing_at_a_known_point_solve_exactly(self):
+        point = np.array([5.0, 5.0, 0.0])
+        origin_a = np.array([0.0, 0.0, 0.0])
+        direction_a = (point - origin_a) / np.linalg.norm(point - origin_a)
+        origin_b = np.array([10.0, 0.0, 0.0])
+        direction_b = (point - origin_b) / np.linalg.norm(point - origin_b)
+
+        solved = _solve_point([(origin_a, direction_a), (origin_b, direction_b)])
+        for a, b in zip(solved, point):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_residual_is_zero_on_the_line_and_nonzero_off_it(self):
+        origin = np.array([0.0, 0.0, 0.0])
+        direction = np.array([0.0, 1.0, 0.0])
+        on_line_point = np.array([0.0, 7.0, 0.0])
+        off_line_point = np.array([3.0, 7.0, 0.0])
+
+        self.assertAlmostEqual(_residual(on_line_point, origin, direction), 0.0, places=6)
+        self.assertGreater(_residual(off_line_point, origin, direction), 2.9)
+
+
+class TriangulateFlightOutlierTests(TestCase):
+    def setUp(self):
+        self.session = TrackingSession.objects.create(name="Triangulation Outlier Test")
+        self.flight = TrackingFlight.objects.create(session=self.session)
+
+    def test_a_clear_outlier_station_is_rejected_and_point_stays_accurate(self):
+        # Uses 4 stations (3 good + 1 grossly mistapped), not 3: with only
+        # 3 rays total, a single bad one pulls the shared least-squares
+        # fit toward it enough that its own residual often isn't clearly
+        # worse than the *other two* stations' (now also-inflated)
+        # residuals - the worst-vs-second-worst heuristic needs a stable
+        # "healthy majority" to compare against, which 2-good-vs-1-bad
+        # doesn't reliably provide. 3-good-vs-1-bad does. This mirrors the
+        # motivation for "avoid hard-coding against future expansion" -
+        # more stations make outlier rejection meaningfully more reliable,
+        # not just more redundant.
+        positions = {
+            "A": (30.0, 0.0, 0.0),
+            "B": (-30.0, 0.0, 0.0),
+            "C": (0.0, 30.0, 0.0),
+            "D": (0.0, -30.0, 0.0),
+        }
+        point_t0 = (0.0, 0.0, 20.0)
+        point_t1 = (0.0, 0.0, 25.0)
+
+        stations = {
+            label: _make_station_aimed_at(self.session, label, i + 1, pos, point_t0)
+            for i, (label, pos) in enumerate(positions.items())
+        }
+
+        for frame_index, (t_ms, point) in enumerate([(0, point_t0), (1000, point_t1)]):
+            for label, station in stations.items():
+                position = positions[label]
+                calibration = station.calibrations.get(is_active=True)
+                if label == "D":
+                    # A gross mistap - roughly a wrong corner of frame,
+                    # not a proportional offset from the true target.
+                    pixel_x, pixel_y = 1800.0, 950.0
+                else:
+                    pixel_x, pixel_y = project_to_pixel(point, position, calibration)
+                _add_pixel_observation(
+                    self.session, station, self.flight, frame_index, t_ms, pixel_x=pixel_x, pixel_y=pixel_y
+                )
+
+        created = triangulate_flight(self.flight)
+        self.assertGreater(len(created), 0)
+        for tp in created:
+            self.assertIn(stations["D"].id, tp.rejected_stations)
+            for label in ("A", "B", "C"):
+                self.assertIn(stations[label].id, tp.stations_used)
+
+            frac = tp.synchronized_timestamp_ms / 1000.0
+            expected_z = 20.0 + 5.0 * frac
+            self.assertAlmostEqual(tp.z_m, expected_z, delta=0.5)
+
+    def test_rerunning_does_not_duplicate_rows(self):
+        position_a = (30.0, 0.0, 0.0)
+        position_b = (-30.0, 0.0, 0.0)
+        point = (0.0, 0.0, 20.0)
+        station_a = _make_station_aimed_at(self.session, "A", 1, position_a, point)
+        station_b = _make_station_aimed_at(self.session, "B", 2, position_b, point)
+
+        for frame_index, t_ms in enumerate([0, 1000]):
+            for station, position in [(station_a, position_a), (station_b, position_b)]:
+                calibration = station.calibrations.get(is_active=True)
+                pixel_x, pixel_y = project_to_pixel(point, position, calibration)
+                _add_pixel_observation(
+                    self.session, station, self.flight, frame_index, t_ms, pixel_x=pixel_x, pixel_y=pixel_y
+                )
+
+        first_count = len(triangulate_flight(self.flight))
+        second_count = len(triangulate_flight(self.flight))
+        self.assertEqual(first_count, second_count)
+        self.assertEqual(TriangulatedPoint.objects.filter(flight=self.flight).count(), second_count)
+
+
+class TriangulateMockFlightTests(TestCase):
+    def test_corrupted_frame_shows_elevated_residual_but_stays_bounded(self):
+        # The mock flight has only 3 stations, and its one deliberately
+        # corrupted observation is a moderate pixel offset, not a gross
+        # mistap - confirmed (via the outlier test above, which uses 4
+        # stations) that the worst-vs-second-worst heuristic needs a
+        # stable "healthy majority" to reliably reject against, which
+        # 2-good-vs-1-bad doesn't provide as cleanly as 3-good-vs-1-bad.
+        # So this checks what *should* honestly be true at N=3: the
+        # corrupted frame's residual is clearly elevated versus its
+        # clean neighbors, and the resulting point - while pulled off
+        # slightly - stays roughly in the right place, not wildly wrong.
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        created = triangulate_flight(flight)
+        self.assertGreater(len(created), 0)
+
+        frame_dt = 1.0 / FRAME_RATE_HZ
+        num_frames = int(flight_duration_s() / frame_dt) + 1
+        bad_time_ms = (num_frames // 2) * frame_dt * 1000
+
+        sorted_created = sorted(created, key=lambda tp: tp.synchronized_timestamp_ms)
+        nearest = min(sorted_created, key=lambda tp: abs(tp.synchronized_timestamp_ms - bad_time_ms))
+        idx = sorted_created.index(nearest)
+        neighbor = sorted_created[idx - 4]
+
+        self.assertGreater(nearest.residual_error_m, 1.0)
+        self.assertLess(neighbor.residual_error_m, 0.5)
+
+        true_z = rocket_trajectory(nearest.synchronized_timestamp_ms / 1000)[2]
+        self.assertAlmostEqual(nearest.z_m, true_z, delta=2.0)
+
+    def test_clean_frames_away_from_the_corruption_use_all_stations(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        created = triangulate_flight(flight)
+
+        frame_dt = 1.0 / FRAME_RATE_HZ
+        num_frames = int(flight_duration_s() / frame_dt) + 1
+        bad_time_ms = (num_frames // 2) * frame_dt * 1000
+
+        far_point = min(created, key=lambda tp: abs(tp.synchronized_timestamp_ms - bad_time_ms / 4))
+        self.assertEqual(far_point.rejected_stations, [])
+        true_z = rocket_trajectory(far_point.synchronized_timestamp_ms / 1000)[2]
+        self.assertAlmostEqual(far_point.z_m, true_z, delta=1.0)
+
+
+class ObservationUploadAutoTriggersTriangulationTests(TestCase):
+    def test_upload_populates_triangulated_points_once_two_stations_have_data(self):
+        session = TrackingSession.objects.create(name="Auto Triangulate Test")
+        flight = TrackingFlight.objects.create(session=session)
+
+        position_a = (30.0, 0.0, 0.0)
+        position_b = (-30.0, 0.0, 0.0)
+        point = (0.0, 0.0, 20.0)
+
+        station_a = _make_station_aimed_at(session, "A", 1, position_a, point)
+        station_b = _make_station_aimed_at(session, "B", 2, position_b, point)
+        for station in (station_a, station_b):
+            station.clock_offset_ms = 0.0
+            station.save(update_fields=["clock_offset_ms"])
+
+        def upload(station, position):
+            calibration = station.calibrations.get(is_active=True)
+            pixel_x, pixel_y = project_to_pixel(point, position, calibration)
+            return self.client.post(
+                "/api/optical/stations/observations/",
+                data=json.dumps(
+                    {
+                        "device_token": station.device_token,
+                        "flight_number": flight.number,
+                        "image_width_px": 1920,
+                        "image_height_px": 1080,
+                        "observations": [
+                            {"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": pixel_x, "pixel_y": pixel_y},
+                            {"frame_index": 1, "local_timestamp_ms": 1000, "pixel_x": pixel_x, "pixel_y": pixel_y},
+                        ],
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        res_a = upload(station_a, position_a)
+        self.assertEqual(res_a.status_code, 201, res_a.content)
+        self.assertEqual(TriangulatedPoint.objects.filter(flight=flight).count(), 0)
+
+        res_b = upload(station_b, position_b)
+        self.assertEqual(res_b.status_code, 201, res_b.content)
+        self.assertGreater(TriangulatedPoint.objects.filter(flight=flight).count(), 0)

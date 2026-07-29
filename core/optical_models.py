@@ -228,6 +228,9 @@ class TriangulatedPoint(models.Model):
     session = models.ForeignKey(
         TrackingSession, related_name="triangulated_points", on_delete=models.CASCADE
     )
+    flight = models.ForeignKey(
+        TrackingFlight, related_name="triangulated_points", on_delete=models.CASCADE
+    )
     synchronized_timestamp_ms = models.BigIntegerField()
     x_m = models.FloatField()
     y_m = models.FloatField()

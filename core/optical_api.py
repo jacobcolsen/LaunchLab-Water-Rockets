@@ -22,6 +22,7 @@ from .optical_serializers import (
     TrackingStationCreateResponseSerializer,
     TrackingStationSerializer,
 )
+from .optical_triangulation import triangulate_flight
 
 CALIBRATION_FIELDS = (
     "image_width_px",
@@ -259,6 +260,8 @@ class TrackingObservationUploadView(APIView):
                     valid=True,
                 )
                 pixel_count += 1
+
+        triangulate_flight(flight)
 
         return Response(
             {"frames": frame_count, "pixels": pixel_count}, status=status.HTTP_201_CREATED
