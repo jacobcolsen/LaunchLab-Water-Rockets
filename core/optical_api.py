@@ -1,4 +1,6 @@
+from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -228,16 +230,20 @@ class TrackingObservationUploadView(APIView):
             if frame_index is None or local_timestamp_ms is None:
                 continue
 
+            defaults = {
+                "session": station.session,
+                "local_timestamp_ms": local_timestamp_ms,
+                "image_width_px": image_width_px,
+                "image_height_px": image_height_px,
+            }
+            if station.clock_offset_ms is not None:
+                defaults["synchronized_timestamp_ms"] = round(local_timestamp_ms + station.clock_offset_ms)
+
             frame, _ = FrameObservation.objects.update_or_create(
                 station=station,
                 flight=flight,
                 frame_index=frame_index,
-                defaults={
-                    "session": station.session,
-                    "local_timestamp_ms": local_timestamp_ms,
-                    "image_width_px": image_width_px,
-                    "image_height_px": image_height_px,
-                },
+                defaults=defaults,
             )
             frame_count += 1
 
@@ -256,4 +262,53 @@ class TrackingObservationUploadView(APIView):
 
         return Response(
             {"frames": frame_count, "pixels": pixel_count}, status=status.HTTP_201_CREATED
+        )
+
+
+def server_time_view(request):
+    """Stateless time echo for the client-side NTP-style round-trip
+    exchange (Phase 5) - no device_token, no station lookup, just the
+    server's current clock as fast as possible."""
+    return JsonResponse({"server_time_ms": int(timezone.now().timestamp() * 1000)})
+
+
+class TrackingStationClockSyncView(APIView):
+    """Persists the offset a station's phone already computed client-side
+    from several round trips against server_time_view, and backfills any
+    of that station's frames still missing synchronized_timestamp_ms."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        device_token = request.data.get("device_token")
+        offset_ms = request.data.get("offset_ms")
+        round_trip_ms = request.data.get("round_trip_ms")
+        if not device_token or offset_ms is None:
+            return Response(
+                {"detail": "device_token and offset_ms are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        station = get_object_or_404(TrackingStation, device_token=device_token)
+        station.clock_offset_ms = offset_ms
+        station.clock_round_trip_ms = round_trip_ms
+        station.clock_synced_at = timezone.now()
+        station.save(update_fields=["clock_offset_ms", "clock_round_trip_ms", "clock_synced_at"])
+
+        unsynced_frames = list(
+            FrameObservation.objects.filter(station=station, synchronized_timestamp_ms__isnull=True)
+        )
+        for frame in unsynced_frames:
+            frame.synchronized_timestamp_ms = round(frame.local_timestamp_ms + offset_ms)
+        FrameObservation.objects.bulk_update(unsynced_frames, ["synchronized_timestamp_ms"])
+
+        return Response(
+            {
+                "clock_offset_ms": station.clock_offset_ms,
+                "clock_round_trip_ms": station.clock_round_trip_ms,
+                "clock_synced_at": station.clock_synced_at,
+                "backfilled_frames": len(unsynced_frames),
+            },
+            status=status.HTTP_200_OK,
         )

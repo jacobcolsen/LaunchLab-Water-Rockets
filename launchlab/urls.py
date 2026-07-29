@@ -34,8 +34,10 @@ from core.optical_api import (
     TrackingSessionCreateView,
     TrackingStationCalibrationRefineView,
     TrackingStationCalibrationView,
+    TrackingStationClockSyncView,
     TrackingStationListCreateView,
     TrackingStationPositionView,
+    server_time_view,
 )
 from core.optical_views import (
     optical_control_view,
@@ -132,5 +134,11 @@ urlpatterns = [
         'api/optical/stations/observations/',
         TrackingObservationUploadView.as_view(),
         name='api-optical-observation-upload',
+    ),
+    path('api/optical/server-time/', server_time_view, name='api-optical-server-time'),
+    path(
+        'api/optical/stations/clock-sync/',
+        TrackingStationClockSyncView.as_view(),
+        name='api-optical-station-clock-sync',
     ),
 ]

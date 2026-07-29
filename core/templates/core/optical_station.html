@@ -179,6 +179,9 @@
       <div id="current-flight-display" class="hint">Loading…</div>
       <button type="button" id="refresh-flight-btn" class="btn btn-secondary">🔄 Refresh Flight</button>
 
+      <button type="button" id="sync-clock-btn" class="btn btn-secondary">🕐 Sync Clock</button>
+      <div id="clock-sync-status" class="hint"></div>
+
       <div id="record-controls" style="margin-top: 1rem;">
         <button type="button" id="start-recording-btn" class="btn btn-primary">⏺ Start Recording</button>
         <button type="button" id="stop-recording-btn" class="btn btn-danger" style="display:none;">⏹ Stop Recording</button>
@@ -548,6 +551,49 @@
     }
 
     document.getElementById('refresh-flight-btn').addEventListener('click', refreshCurrentFlight);
+
+    const CLOCK_SYNC_ROUND_TRIPS = 5;
+
+    async function measureClockOffset() {
+      let best = null;
+      for (let i = 0; i < CLOCK_SYNC_ROUND_TRIPS; i++) {
+        const t0 = Date.now();
+        const res = await fetch('/api/optical/server-time/');
+        const data = await res.json();
+        const t2 = Date.now();
+        const roundTripMs = t2 - t0;
+        const offsetMs = data.server_time_ms - (t0 + t2) / 2;
+        if (best === null || roundTripMs < best.roundTripMs) {
+          best = { offsetMs, roundTripMs };
+        }
+      }
+      return best;
+    }
+
+    document.getElementById('sync-clock-btn').addEventListener('click', async () => {
+      const statusEl = document.getElementById('clock-sync-status');
+      statusEl.textContent = 'Syncing…';
+      const { offsetMs, roundTripMs } = await measureClockOffset();
+
+      const cached = JSON.parse(localStorage.getItem(storageKey));
+      const res = await fetch('/api/optical/stations/clock-sync/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_token: cached.device_token,
+          offset_ms: offsetMs,
+          round_trip_ms: roundTripMs,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.innerHTML = `<span class="error">${data.detail || 'Sync failed.'}</span>`;
+        return;
+      }
+      statusEl.textContent =
+        `Synced (offset: ${offsetMs.toFixed(0)} ms, round-trip: ${roundTripMs.toFixed(0)} ms)` +
+        (data.backfilled_frames ? ` - backfilled ${data.backfilled_frames} earlier frame(s)` : '');
+    });
 
     document.getElementById('start-recording-btn').addEventListener('click', () => {
       recordedChunks = [];

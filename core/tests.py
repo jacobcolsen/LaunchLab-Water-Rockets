@@ -1,5 +1,6 @@
 import json
 import math
+import time
 
 from django.test import TestCase
 
@@ -489,3 +490,108 @@ class OpticalFlightAndObservationApiTests(TestCase):
         expected_direction = _normalize(world_point)
         for a, b in zip(expected_direction, recovered_direction):
             self.assertAlmostEqual(a, b, places=4)
+
+
+class OpticalClockSyncApiTests(TestCase):
+    """Phase 5: server-time echo + per-station clock offset sync."""
+
+    def setUp(self):
+        session_res = self.client.post(
+            "/api/optical/sessions/",
+            data=json.dumps({"name": "Clock Sync Test Session"}),
+            content_type="application/json",
+        )
+        self.session_id = session_res.json()["id"]
+        station_res = self.client.post(
+            f"/api/optical/sessions/{self.session_id}/stations/",
+            data=json.dumps({"label": "Station A", "position_source": "mock"}),
+            content_type="application/json",
+        )
+        self.token = station_res.json()["device_token"]
+
+    def _create_flight(self):
+        res = self.client.post(
+            f"/api/optical/sessions/{self.session_id}/flights/",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        return res.json()
+
+    def _sync(self, offset_ms, round_trip_ms=25.0):
+        return self.client.post(
+            "/api/optical/stations/clock-sync/",
+            data=json.dumps(
+                {"device_token": self.token, "offset_ms": offset_ms, "round_trip_ms": round_trip_ms}
+            ),
+            content_type="application/json",
+        )
+
+    def test_server_time_returns_a_plausible_timestamp(self):
+        before_ms = int(time.time() * 1000)
+        res = self.client.get("/api/optical/server-time/")
+        after_ms = int(time.time() * 1000)
+        self.assertEqual(res.status_code, 200)
+        server_time_ms = res.json()["server_time_ms"]
+        self.assertGreaterEqual(server_time_ms, before_ms - 1000)
+        self.assertLessEqual(server_time_ms, after_ms + 1000)
+
+    def test_clock_sync_updates_station_fields(self):
+        res = self._sync(offset_ms=123.4, round_trip_ms=18.0)
+        self.assertEqual(res.status_code, 200, res.content)
+        station = TrackingStation.objects.get(device_token=self.token)
+        self.assertAlmostEqual(station.clock_offset_ms, 123.4, places=3)
+        self.assertAlmostEqual(station.clock_round_trip_ms, 18.0, places=3)
+        self.assertIsNotNone(station.clock_synced_at)
+
+    def test_upload_after_sync_populates_synchronized_timestamp(self):
+        self._sync(offset_ms=500.0)
+        flight = self._create_flight()
+        self.client.post(
+            "/api/optical/stations/observations/",
+            data=json.dumps(
+                {
+                    "device_token": self.token,
+                    "flight_number": flight["number"],
+                    "image_width_px": 1920,
+                    "image_height_px": 1080,
+                    "observations": [
+                        {"frame_index": 0, "local_timestamp_ms": 1000, "pixel_x": 10.0, "pixel_y": 20.0}
+                    ],
+                }
+            ),
+            content_type="application/json",
+        )
+        station = TrackingStation.objects.get(device_token=self.token)
+        frame = FrameObservation.objects.get(station=station, frame_index=0)
+        self.assertEqual(frame.synchronized_timestamp_ms, 1500)
+
+    def test_sync_backfills_previously_unsynced_frames(self):
+        flight = self._create_flight()
+        self.client.post(
+            "/api/optical/stations/observations/",
+            data=json.dumps(
+                {
+                    "device_token": self.token,
+                    "flight_number": flight["number"],
+                    "image_width_px": 1920,
+                    "image_height_px": 1080,
+                    "observations": [
+                        {"frame_index": 0, "local_timestamp_ms": 1000, "pixel_x": 10.0, "pixel_y": 20.0},
+                        {"frame_index": 1, "local_timestamp_ms": 1033, "pixel_x": None, "pixel_y": None},
+                    ],
+                }
+            ),
+            content_type="application/json",
+        )
+        station = TrackingStation.objects.get(device_token=self.token)
+        self.assertIsNone(
+            FrameObservation.objects.get(station=station, frame_index=0).synchronized_timestamp_ms
+        )
+
+        res = self._sync(offset_ms=250.0)
+        self.assertEqual(res.json()["backfilled_frames"], 2)
+
+        frame0 = FrameObservation.objects.get(station=station, frame_index=0)
+        frame1 = FrameObservation.objects.get(station=station, frame_index=1)
+        self.assertEqual(frame0.synchronized_timestamp_ms, 1250)
+        self.assertEqual(frame1.synchronized_timestamp_ms, 1283)
