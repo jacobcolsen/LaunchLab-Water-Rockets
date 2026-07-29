@@ -29,6 +29,7 @@ from core.api import (
     StationRecalibrateView,
 )
 from core.optical_api import (
+    TrackingFlightDebriefView,
     TrackingFlightListCreateView,
     TrackingObservationUploadView,
     TrackingSessionCreateView,
@@ -140,5 +141,10 @@ urlpatterns = [
         'api/optical/stations/clock-sync/',
         TrackingStationClockSyncView.as_view(),
         name='api-optical-station-clock-sync',
+    ),
+    path(
+        'api/optical/flights/<int:flight_id>/debrief/',
+        TrackingFlightDebriefView.as_view(),
+        name='api-optical-flight-debrief',
     ),
 ]

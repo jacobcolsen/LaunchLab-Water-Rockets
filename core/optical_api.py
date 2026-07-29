@@ -7,6 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .optical_camera import solve_boresight_from_tap
+from .optical_debrief import compute_derived_flight_data
 from .optical_models import (
     FrameObservation,
     PixelObservation,
@@ -317,3 +318,12 @@ class TrackingStationClockSyncView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class TrackingFlightDebriefView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, flight_id):
+        flight = get_object_or_404(TrackingFlight, pk=flight_id)
+        return Response(compute_derived_flight_data(flight))

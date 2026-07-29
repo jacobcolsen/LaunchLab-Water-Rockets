@@ -29,6 +29,7 @@ from .optical_models import (
     TrajectoryPoint,
     TriangulatedPoint,
 )
+from .optical_debrief import compute_derived_flight_data
 from .optical_rays import _interp_bearing_series, generate_rays_for_flight
 from .optical_trajectory import _moving_average, assemble_trajectory_for_flight
 from .optical_triangulation import _residual, _solve_point, triangulate_flight
@@ -1133,3 +1134,108 @@ class ObservationUploadAutoAssemblesTrajectoryTests(TestCase):
 
         upload(station_b, position_b)
         self.assertGreater(TrajectoryPoint.objects.filter(flight=flight).count(), 0)
+
+
+def _make_trajectory_point(flight, t_ms, x, y, z, is_gap_filled=False):
+    return TrajectoryPoint.objects.create(
+        session=flight.session,
+        flight=flight,
+        timestamp_ms=t_ms,
+        raw_x_m=x,
+        raw_y_m=y,
+        raw_z_m=z,
+        filtered_x_m=x,
+        filtered_y_m=y,
+        filtered_z_m=z,
+        is_interpolated=is_gap_filled,
+        is_gap_filled=is_gap_filled,
+    )
+
+
+class ComputeDerivedFlightDataTests(TestCase):
+    def setUp(self):
+        self.session = TrackingSession.objects.create(name="Derived Flight Data Test")
+        self.flight = TrackingFlight.objects.create(session=self.session)
+
+    def test_hand_built_trajectory_matches_exact_expected_values(self):
+        _make_trajectory_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_trajectory_point(self.flight, 1000, 2.0, 1.0, 20.0)
+        _make_trajectory_point(self.flight, 2000, 4.0, 2.0, 30.0)  # apogee
+        _make_trajectory_point(self.flight, 3000, 6.0, 3.0, 15.0)
+        _make_trajectory_point(self.flight, 4000, 8.0, 4.0, 0.0)  # landing
+
+        data = compute_derived_flight_data(self.flight)
+
+        self.assertAlmostEqual(data["flight_duration_s"], 4.0)
+        self.assertAlmostEqual(data["time_to_apogee_s"], 2.0)
+        self.assertAlmostEqual(data["apogee_height_m"], 30.0)
+        self.assertAlmostEqual(data["ascent_rate_max_m_s"], 20.0)
+        self.assertAlmostEqual(data["descent_rate_max_m_s"], 15.0)
+        self.assertAlmostEqual(data["max_speed_m_s"], math.sqrt(2**2 + 1**2 + 20**2), places=4)
+        self.assertAlmostEqual(data["drift_at_apogee_m"], math.hypot(4.0, 2.0), places=4)
+        self.assertAlmostEqual(data["landing_estimate"]["distance_m"], math.hypot(8.0, 4.0), places=4)
+        expected_bearing = math.degrees(math.atan2(8.0, 4.0)) % 360
+        self.assertAlmostEqual(data["landing_estimate"]["bearing_deg"], expected_bearing, places=4)
+        self.assertEqual(data["limitations"], [])
+
+    def test_fewer_than_two_points_returns_gracefully(self):
+        _make_trajectory_point(self.flight, 0, 0.0, 0.0, 0.0)
+        data = compute_derived_flight_data(self.flight)
+        self.assertIsNone(data["flight_duration_s"])
+        self.assertIsNone(data["apogee_height_m"])
+        self.assertTrue(data["limitations"])
+
+    def test_landing_well_above_pad_is_flagged_as_a_caution(self):
+        _make_trajectory_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_trajectory_point(self.flight, 1000, 0.0, 0.0, 20.0)
+        _make_trajectory_point(self.flight, 2000, 0.0, 0.0, 15.0)  # last point still 15m up
+
+        data = compute_derived_flight_data(self.flight)
+        self.assertTrue(any("landing" in msg.lower() for msg in data["limitations"]))
+
+    def test_gap_filled_points_are_noted_in_limitations(self):
+        _make_trajectory_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_trajectory_point(self.flight, 50, 1.0, 0.0, 1.0, is_gap_filled=True)
+        _make_trajectory_point(self.flight, 100, 2.0, 0.0, 2.0)
+
+        data = compute_derived_flight_data(self.flight)
+        self.assertTrue(any("interpolated" in msg.lower() for msg in data["limitations"]))
+
+
+class ComputeDerivedFlightDataMockFlightTests(TestCase):
+    def test_apogee_and_duration_track_the_simulated_flight(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulate_flight(flight)
+        assemble_trajectory_for_flight(flight)
+
+        data = compute_derived_flight_data(flight)
+        self.assertIsNotNone(data["apogee_height_m"])
+        self.assertAlmostEqual(data["apogee_height_m"], 45.0, delta=1.5)
+        self.assertAlmostEqual(data["flight_duration_s"], flight_duration_s(), delta=0.3)
+        self.assertGreater(data["landing_estimate"]["distance_m"], 0.0)
+
+
+class TrackingFlightDebriefApiTests(TestCase):
+    def test_debrief_endpoint_returns_expected_keys(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulate_flight(flight)
+        assemble_trajectory_for_flight(flight)
+
+        res = self.client.get(f"/api/optical/flights/{flight.id}/debrief/")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        for key in (
+            "flight_duration_s",
+            "time_to_apogee_s",
+            "apogee_height_m",
+            "ascent_rate_max_m_s",
+            "descent_rate_max_m_s",
+            "max_speed_m_s",
+            "drift_at_apogee_m",
+            "landing_estimate",
+            "limitations",
+        ):
+            self.assertIn(key, data)
+        self.assertAlmostEqual(data["apogee_height_m"], 45.0, delta=1.5)
