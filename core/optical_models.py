@@ -302,6 +302,7 @@ class FlightEvent(models.Model):
     ]
 
     session = models.ForeignKey(TrackingSession, related_name="flight_events", on_delete=models.CASCADE)
+    flight = models.ForeignKey(TrackingFlight, related_name="flight_events", on_delete=models.CASCADE)
     event_type = models.CharField(max_length=20, choices=EVENT_TYPE_CHOICES)
     timestamp_ms = models.BigIntegerField()
     confidence = models.FloatField(null=True, blank=True)

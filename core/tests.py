@@ -20,6 +20,7 @@ from .optical_mock import (
     rocket_trajectory,
 )
 from .optical_models import (
+    FlightEvent,
     FrameObservation,
     PixelObservation,
     StationCalibration,
@@ -30,6 +31,7 @@ from .optical_models import (
     TriangulatedPoint,
 )
 from .optical_debrief import compute_derived_flight_data
+from .optical_events import detect_flight_events
 from .optical_rays import _interp_bearing_series, generate_rays_for_flight
 from .optical_trajectory import _moving_average, assemble_trajectory_for_flight
 from .optical_triangulation import _residual, _solve_point, triangulate_flight
@@ -1239,3 +1241,155 @@ class TrackingFlightDebriefApiTests(TestCase):
         ):
             self.assertIn(key, data)
         self.assertAlmostEqual(data["apogee_height_m"], 45.0, delta=1.5)
+
+
+class DetectFlightEventsTests(TestCase):
+    def setUp(self):
+        self.session = TrackingSession.objects.create(name="Flight Event Detection Test")
+        self.flight = TrackingFlight.objects.create(session=self.session)
+
+    def _build_full_scenario(self):
+        # Vertical-only motion with a genuine accelerate-then-decelerate
+        # ascent, so burnout (peak speed) is a real, separate instant
+        # from first_motion/launch.
+        z_by_t = {
+            0: 0.0,
+            100: 0.05,  # still within the first_motion threshold
+            200: 0.5,  # first_motion/launch triggers here
+            300: 3.0,  # accelerating (v=25 m/s)
+            400: 8.0,  # peak speed (v=50 m/s) -> burnout proxy at t_mid=350
+            500: 12.0,  # already decelerating (v=40 m/s)
+            600: 15.0,
+            700: 17.0,
+            800: 18.0,
+            900: 18.2,  # apogee
+            1000: 18.0,
+            1100: 15.0,
+            1200: 10.0,
+            1300: 5.0,
+            1400: 0.5,  # landing near the pad
+        }
+        for t, z in sorted(z_by_t.items()):
+            _make_trajectory_point(self.flight, t, 0.0, 0.0, z)
+
+    def test_full_scenario_detects_events_in_the_right_order(self):
+        self._build_full_scenario()
+        events = detect_flight_events(self.flight)
+        by_type = {e.event_type: e for e in events}
+
+        self.assertEqual(set(by_type.keys()), {"first_motion", "launch", "burnout", "apogee", "landing"})
+        self.assertEqual(by_type["first_motion"].timestamp_ms, 200)
+        self.assertEqual(by_type["launch"].timestamp_ms, 200)
+        self.assertEqual(by_type["burnout"].timestamp_ms, 350)
+        self.assertEqual(by_type["apogee"].timestamp_ms, 900)
+        self.assertEqual(by_type["landing"].timestamp_ms, 1400)
+
+        self.assertLess(by_type["launch"].timestamp_ms, by_type["burnout"].timestamp_ms)
+        self.assertLess(by_type["burnout"].timestamp_ms, by_type["apogee"].timestamp_ms)
+        self.assertLess(by_type["apogee"].timestamp_ms, by_type["landing"].timestamp_ms)
+
+        for event in events:
+            self.assertIsNone(event.confidence)
+            self.assertTrue(event.detection_method)
+
+        self.assertEqual(by_type["landing"].detection_method, "height dropped back near the pad")
+        self.assertEqual(by_type["landing"].notes, "")
+
+    def test_no_motion_produces_no_events(self):
+        for t in range(0, 500, 100):
+            _make_trajectory_point(self.flight, t, 0.0, 0.0, 0.05)  # never crosses 0.3m
+        events = detect_flight_events(self.flight)
+        self.assertEqual(events, [])
+        self.assertEqual(FlightEvent.objects.filter(flight=self.flight).count(), 0)
+
+    def test_coverage_ending_early_flags_landing_as_unconfirmed(self):
+        _make_trajectory_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_trajectory_point(self.flight, 500, 0.0, 0.0, 20.0)
+        _make_trajectory_point(self.flight, 1000, 0.0, 0.0, 25.0)  # coverage ends while still airborne
+
+        events = detect_flight_events(self.flight)
+        landing = next(e for e in events if e.event_type == "landing")
+        self.assertIn("multi-station coverage", landing.detection_method.lower())
+        self.assertTrue(landing.notes)
+
+    def test_rerunning_does_not_duplicate_rows(self):
+        self._build_full_scenario()
+        first_count = len(detect_flight_events(self.flight))
+        second_count = len(detect_flight_events(self.flight))
+        self.assertEqual(first_count, second_count)
+        self.assertEqual(FlightEvent.objects.filter(flight=self.flight).count(), second_count)
+
+
+class DetectFlightEventsMockFlightTests(TestCase):
+    def test_events_land_at_sensible_times(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulate_flight(flight)
+        assemble_trajectory_for_flight(flight)
+
+        events = detect_flight_events(flight)
+        by_type = {e.event_type: e for e in events}
+        self.assertEqual(set(by_type.keys()), {"first_motion", "launch", "burnout", "apogee", "landing"})
+
+        # Matches Phase 9's own apogee-time check for this same fixture.
+        self.assertAlmostEqual(by_type["apogee"].timestamp_ms / 1000, 2.95, delta=0.3)
+
+        # The mock's trajectory model has no modeled thrust ramp - full
+        # velocity is attained instantly at t=0 (see optical_mock.py's
+        # rocket_trajectory), so "peak ascent speed" (burnout's proxy)
+        # coincides with launch for this fixture. That's the simulation's
+        # simplification showing through honestly, not a bug in the
+        # detector - a real flight's gradual thrust build-up would give
+        # burnout a genuinely separate timestamp, as the hand-built
+        # scenario above already confirms.
+        self.assertAlmostEqual(
+            by_type["burnout"].timestamp_ms, by_type["launch"].timestamp_ms, delta=100
+        )
+
+
+class ObservationUploadAutoDetectsFlightEventsTests(TestCase):
+    def test_upload_populates_flight_events_once_two_stations_have_data(self):
+        session = TrackingSession.objects.create(name="Auto Flight Events Test")
+        flight = TrackingFlight.objects.create(session=session)
+
+        position_a = (30.0, 0.0, 0.0)
+        position_b = (-30.0, 0.0, 0.0)
+        # Two distinct instants with real vertical motion, so the
+        # auto-triggered detection has something to actually find.
+        point0 = (0.0, 0.0, 0.0)
+        point1 = (0.0, 0.0, 5.0)
+
+        station_a = _make_station_aimed_at(session, "A", 1, position_a, point0)
+        station_b = _make_station_aimed_at(session, "B", 2, position_b, point0)
+        for station in (station_a, station_b):
+            station.clock_offset_ms = 0.0
+            station.save(update_fields=["clock_offset_ms"])
+
+        def upload(station, position):
+            calibration = station.calibrations.get(is_active=True)
+            pixel0 = project_to_pixel(point0, position, calibration)
+            pixel1 = project_to_pixel(point1, position, calibration)
+            return self.client.post(
+                "/api/optical/stations/observations/",
+                data=json.dumps(
+                    {
+                        "device_token": station.device_token,
+                        "flight_number": flight.number,
+                        "image_width_px": 1920,
+                        "image_height_px": 1080,
+                        "observations": [
+                            {"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": pixel0[0], "pixel_y": pixel0[1]},
+                            {"frame_index": 1, "local_timestamp_ms": 1000, "pixel_x": pixel1[0], "pixel_y": pixel1[1]},
+                        ],
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        upload(station_a, position_a)
+        self.assertEqual(FlightEvent.objects.filter(flight=flight).count(), 0)
+
+        upload(station_b, position_b)
+        events = FlightEvent.objects.filter(flight=flight)
+        self.assertGreater(events.count(), 0)
+        self.assertTrue(events.filter(event_type=FlightEvent.EVENT_FIRST_MOTION).exists())

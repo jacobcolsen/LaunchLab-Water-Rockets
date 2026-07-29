@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 
 from .optical_camera import solve_boresight_from_tap
 from .optical_debrief import compute_derived_flight_data
+from .optical_events import detect_flight_events
 from .optical_models import (
     FrameObservation,
     PixelObservation,
@@ -265,6 +266,7 @@ class TrackingObservationUploadView(APIView):
 
         triangulate_flight(flight)
         assemble_trajectory_for_flight(flight)
+        detect_flight_events(flight)
 
         return Response(
             {"frames": frame_count, "pixels": pixel_count}, status=status.HTTP_201_CREATED
