@@ -257,6 +257,9 @@ class TrajectoryPoint(models.Model):
     session = models.ForeignKey(
         TrackingSession, related_name="trajectory_points", on_delete=models.CASCADE
     )
+    flight = models.ForeignKey(
+        TrackingFlight, related_name="trajectory_points", on_delete=models.CASCADE
+    )
     timestamp_ms = models.BigIntegerField()
     source_point = models.ForeignKey(
         TriangulatedPoint,

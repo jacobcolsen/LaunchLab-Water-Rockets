@@ -26,9 +26,11 @@ from .optical_models import (
     TrackingFlight,
     TrackingSession,
     TrackingStation,
+    TrajectoryPoint,
     TriangulatedPoint,
 )
 from .optical_rays import _interp_bearing_series, generate_rays_for_flight
+from .optical_trajectory import _moving_average, assemble_trajectory_for_flight
 from .optical_triangulation import _residual, _solve_point, triangulate_flight
 
 
@@ -990,3 +992,144 @@ class ObservationUploadAutoTriggersTriangulationTests(TestCase):
         res_b = upload(station_b, position_b)
         self.assertEqual(res_b.status_code, 201, res_b.content)
         self.assertGreater(TriangulatedPoint.objects.filter(flight=flight).count(), 0)
+
+
+def _make_triangulated_point(flight, t_ms, x, y, z):
+    return TriangulatedPoint.objects.create(
+        session=flight.session,
+        flight=flight,
+        synchronized_timestamp_ms=t_ms,
+        x_m=x,
+        y_m=y,
+        z_m=z,
+        stations_used=[],
+        stations_used_count=0,
+        rejected_stations=[],
+    )
+
+
+class MovingAverageTests(TestCase):
+    def test_centered_average_with_shrinking_window_at_edges(self):
+        values = [0.0, 10.0, 20.0, 30.0, 40.0]
+        result = _moving_average(values, window_points=3)
+
+        self.assertAlmostEqual(result[0], (0.0 + 10.0) / 2)
+        self.assertAlmostEqual(result[1], (0.0 + 10.0 + 20.0) / 3)
+        self.assertAlmostEqual(result[2], (10.0 + 20.0 + 30.0) / 3)
+        self.assertAlmostEqual(result[3], (20.0 + 30.0 + 40.0) / 3)
+        self.assertAlmostEqual(result[4], (30.0 + 40.0) / 2)
+
+    def test_window_of_one_returns_values_unchanged(self):
+        values = [1.0, 2.0, 3.0]
+        self.assertEqual(_moving_average(values, window_points=1), values)
+
+
+class AssembleTrajectoryForFlightTests(TestCase):
+    def setUp(self):
+        self.session = TrackingSession.objects.create(name="Trajectory Assembly Test")
+        self.flight = TrackingFlight.objects.create(session=self.session)
+
+    def test_small_gap_gets_linearly_interpolated(self):
+        _make_triangulated_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_triangulated_point(self.flight, 50, 5.0, 0.0, 0.0)
+        _make_triangulated_point(self.flight, 100, 10.0, 0.0, 0.0)
+        _make_triangulated_point(self.flight, 250, 25.0, 0.0, 0.0)  # 150ms gap after t=100
+
+        created = assemble_trajectory_for_flight(self.flight)
+        by_time = {tp.timestamp_ms: tp for tp in created}
+
+        self.assertEqual(set(by_time.keys()), {0, 50, 100, 150, 200, 250})
+        self.assertFalse(by_time[100].is_gap_filled)
+        self.assertIsNotNone(by_time[100].source_point)
+        self.assertTrue(by_time[150].is_gap_filled)
+        self.assertIsNone(by_time[150].source_point)
+        self.assertAlmostEqual(by_time[150].raw_x_m, 15.0)
+        self.assertTrue(by_time[200].is_gap_filled)
+        self.assertAlmostEqual(by_time[200].raw_x_m, 20.0)
+        self.assertFalse(by_time[250].is_gap_filled)
+
+    def test_large_gap_is_left_as_an_honest_hole(self):
+        _make_triangulated_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_triangulated_point(self.flight, 2000, 100.0, 0.0, 0.0)  # 2000ms gap
+
+        created = assemble_trajectory_for_flight(self.flight, max_gap_fill_ms=1000)
+        self.assertEqual(len(created), 2)
+        timestamps = {tp.timestamp_ms for tp in created}
+        self.assertEqual(timestamps, {0, 2000})
+
+    def test_rerunning_does_not_duplicate_rows(self):
+        _make_triangulated_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_triangulated_point(self.flight, 50, 1.0, 0.0, 0.0)
+        _make_triangulated_point(self.flight, 100, 2.0, 0.0, 0.0)
+
+        first_count = len(assemble_trajectory_for_flight(self.flight))
+        second_count = len(assemble_trajectory_for_flight(self.flight))
+        self.assertEqual(first_count, second_count)
+        self.assertEqual(TrajectoryPoint.objects.filter(flight=self.flight).count(), second_count)
+
+    def test_fewer_than_two_triangulated_points_produces_nothing(self):
+        _make_triangulated_point(self.flight, 0, 0.0, 0.0, 0.0)
+        self.assertEqual(assemble_trajectory_for_flight(self.flight), [])
+
+
+class AssembleTrajectoryForMockFlightTests(TestCase):
+    def test_filtered_trajectory_tracks_the_simulated_flight_profile(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulated = triangulate_flight(flight)
+        assembled = assemble_trajectory_for_flight(flight)
+
+        self.assertGreater(len(assembled), 0)
+        # Small dropped-frame gaps are well within the default threshold,
+        # so the assembled trajectory should be close in size to the raw
+        # triangulated points (plus a handful of gap-filled slots).
+        self.assertGreaterEqual(len(assembled), len(triangulated))
+
+        max_filtered_z = max(tp.filtered_z_m for tp in assembled)
+        max_raw_z = max(tp.raw_z_m for tp in assembled)
+        self.assertAlmostEqual(max_filtered_z, max_raw_z, delta=1.0)
+
+        true_apogee_m = max(rocket_trajectory(t / 1000.0)[2] for t in range(0, 20000, 50))
+        self.assertAlmostEqual(max_filtered_z, true_apogee_m, delta=1.5)
+
+
+class ObservationUploadAutoAssemblesTrajectoryTests(TestCase):
+    def test_upload_populates_trajectory_points_once_two_stations_have_data(self):
+        session = TrackingSession.objects.create(name="Auto Trajectory Test")
+        flight = TrackingFlight.objects.create(session=session)
+
+        position_a = (30.0, 0.0, 0.0)
+        position_b = (-30.0, 0.0, 0.0)
+        point = (0.0, 0.0, 20.0)
+
+        station_a = _make_station_aimed_at(session, "A", 1, position_a, point)
+        station_b = _make_station_aimed_at(session, "B", 2, position_b, point)
+        for station in (station_a, station_b):
+            station.clock_offset_ms = 0.0
+            station.save(update_fields=["clock_offset_ms"])
+
+        def upload(station, position):
+            calibration = station.calibrations.get(is_active=True)
+            pixel_x, pixel_y = project_to_pixel(point, position, calibration)
+            return self.client.post(
+                "/api/optical/stations/observations/",
+                data=json.dumps(
+                    {
+                        "device_token": station.device_token,
+                        "flight_number": flight.number,
+                        "image_width_px": 1920,
+                        "image_height_px": 1080,
+                        "observations": [
+                            {"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": pixel_x, "pixel_y": pixel_y},
+                            {"frame_index": 1, "local_timestamp_ms": 1000, "pixel_x": pixel_x, "pixel_y": pixel_y},
+                        ],
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        upload(station_a, position_a)
+        self.assertEqual(TrajectoryPoint.objects.filter(flight=flight).count(), 0)
+
+        upload(station_b, position_b)
+        self.assertGreater(TrajectoryPoint.objects.filter(flight=flight).count(), 0)
