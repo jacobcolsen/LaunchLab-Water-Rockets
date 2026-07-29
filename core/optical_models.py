@@ -96,9 +96,11 @@ class TrackingStation(models.Model):
 class StationCalibration(models.Model):
     ORIENTATION_SENSOR = "sensor"
     ORIENTATION_MANUAL = "manual"
+    ORIENTATION_GEOMETRY_REFINED = "geometry_refined"
     ORIENTATION_SOURCE_CHOICES = [
         (ORIENTATION_SENSOR, "Device sensor"),
         (ORIENTATION_MANUAL, "Manual entry"),
+        (ORIENTATION_GEOMETRY_REFINED, "Geometry-refined from a tap"),
     ]
 
     station = models.ForeignKey(TrackingStation, related_name="calibrations", on_delete=models.CASCADE)

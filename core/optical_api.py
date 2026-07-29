@@ -4,11 +4,24 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .optical_models import TrackingSession, TrackingStation
+from .optical_camera import solve_boresight_from_tap
+from .optical_models import StationCalibration, TrackingSession, TrackingStation
 from .optical_serializers import (
+    StationCalibrationSerializer,
     TrackingSessionSerializer,
     TrackingStationCreateResponseSerializer,
     TrackingStationSerializer,
+)
+
+CALIBRATION_FIELDS = (
+    "image_width_px",
+    "image_height_px",
+    "fov_horizontal_deg",
+    "fov_vertical_deg",
+    "facing_deg",
+    "pitch_deg",
+    "roll_deg",
+    "orientation_source",
 )
 
 POSITION_FIELDS = (
@@ -67,3 +80,95 @@ class TrackingStationPositionView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class TrackingStationCalibrationView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        device_token = request.data.get("device_token")
+        if not device_token:
+            return Response(
+                {"detail": "device_token is required."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        station = get_object_or_404(TrackingStation, device_token=device_token)
+        data = {field: request.data[field] for field in CALIBRATION_FIELDS if field in request.data}
+        serializer = StationCalibrationSerializer(data=data)
+        serializer.is_valid(raise_exception=True)
+
+        StationCalibration.objects.filter(station=station, is_active=True).update(is_active=False)
+        calibration = StationCalibration.objects.create(
+            station=station, is_active=True, **serializer.validated_data
+        )
+        return Response(
+            StationCalibrationSerializer(calibration).data, status=status.HTTP_201_CREATED
+        )
+
+
+class TrackingStationCalibrationRefineView(APIView):
+    """Geometry-based correction: given a tap on the pad and the station's
+    already-known ENU position (Phase 2), solves for the exact facing/pitch
+    rather than trusting the compass - only possible for stations whose
+    position is known in the local ENU frame (surveyed_enu/mock)."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        device_token = request.data.get("device_token")
+        tap_pixel_x = request.data.get("tap_pixel_x")
+        tap_pixel_y = request.data.get("tap_pixel_y")
+        if not device_token or tap_pixel_x is None or tap_pixel_y is None:
+            return Response(
+                {"detail": "device_token, tap_pixel_x, and tap_pixel_y are all required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        station = get_object_or_404(TrackingStation, device_token=device_token)
+        if station.position_source not in (TrackingStation.SOURCE_SURVEYED, TrackingStation.SOURCE_MOCK):
+            return Response(
+                {
+                    "detail": "Accuracy refinement is only available for surveyed or mock "
+                    "position sources right now."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if None in (station.surveyed_x_m, station.surveyed_y_m, station.surveyed_z_m):
+            return Response(
+                {"detail": "This station has no saved (x, y, z) position yet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        active = StationCalibration.objects.filter(station=station, is_active=True).first()
+        if active is None:
+            return Response(
+                {"detail": "This station has no calibration to refine yet."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        station_position = (station.surveyed_x_m, station.surveyed_y_m, station.surveyed_z_m)
+        true_direction = tuple(-p for p in station_position)  # the pad sits at the ENU origin
+        facing_deg, pitch_deg = solve_boresight_from_tap(
+            true_direction, float(tap_pixel_x), float(tap_pixel_y), active, active.pitch_deg
+        )
+
+        StationCalibration.objects.filter(station=station, is_active=True).update(is_active=False)
+        calibration = StationCalibration.objects.create(
+            station=station,
+            image_width_px=active.image_width_px,
+            image_height_px=active.image_height_px,
+            fov_horizontal_deg=active.fov_horizontal_deg,
+            fov_vertical_deg=active.fov_vertical_deg,
+            facing_deg=facing_deg,
+            pitch_deg=pitch_deg,
+            roll_deg=active.roll_deg,
+            orientation_source=StationCalibration.ORIENTATION_GEOMETRY_REFINED,
+            calibration_target_pixel_x=tap_pixel_x,
+            calibration_target_pixel_y=tap_pixel_y,
+            is_active=True,
+        )
+        return Response(
+            StationCalibrationSerializer(calibration).data, status=status.HTTP_201_CREATED
+        )

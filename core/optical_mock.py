@@ -4,8 +4,8 @@ Generates a fully-populated, self-consistent `TrackingSession`: three
 stations at known ENU positions around a launch pad at the origin, a
 deterministic water-rocket trajectory, and per-station pixel observations
 produced by *forward*-projecting that true 3D path through each station's
-camera model - the geometric inverse of what Phase 3's pixel-to-bearing
-conversion will need, so that code can reuse the same camera model.
+camera model (`core.optical_camera`) - the geometric inverse of the
+pixel-to-bearing conversion real calibration/observation code uses.
 
 No synchronization or triangulation runs here - this only produces raw
 stored data, deliberately including small per-station clock offsets,
@@ -15,6 +15,7 @@ badly-corrupted observation for later outlier-rejection testing.
 import math
 import random
 
+from .optical_camera import project_to_pixel
 from .optical_models import (
     FrameObservation,
     PixelObservation,
@@ -39,83 +40,6 @@ DEFAULT_STATION_LAYOUT = [
 ]
 
 GRAVITY_M_S2 = 9.81
-
-
-def _cross(a, b):
-    return (
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    )
-
-
-def _dot(a, b):
-    return sum(a[i] * b[i] for i in range(3))
-
-
-def _normalize(v):
-    length = math.sqrt(_dot(v, v))
-    return tuple(c / length for c in v)
-
-
-def camera_forward_vector(facing_deg, pitch_deg):
-    """ENU unit vector the camera boresight points along. Matches the
-    (east, north, up) convention used by core.triangulation.ray_direction:
-    azimuth 0 = north, 90 = east; positive pitch tilts the boresight up."""
-    facing = math.radians(facing_deg)
-    pitch = math.radians(pitch_deg)
-    return (
-        math.cos(pitch) * math.sin(facing),
-        math.cos(pitch) * math.cos(facing),
-        math.sin(pitch),
-    )
-
-
-def camera_basis(facing_deg, pitch_deg, roll_deg=0.0):
-    """Right-handed (right, up, forward) orthonormal unit-vector basis for
-    a camera with the given compass facing / boresight pitch / roll, in
-    ENU coordinates."""
-    forward = camera_forward_vector(facing_deg, pitch_deg)
-    world_up = (0.0, 0.0, 1.0)
-    right = _normalize(_cross(forward, world_up))
-    up = _cross(right, forward)
-
-    if roll_deg:
-        roll = math.radians(roll_deg)
-        cos_r, sin_r = math.cos(roll), math.sin(roll)
-        right, up = (
-            tuple(right[i] * cos_r + up[i] * sin_r for i in range(3)),
-            tuple(-right[i] * sin_r + up[i] * cos_r for i in range(3)),
-        )
-
-    return right, up, forward
-
-
-def project_to_pixel(world_point, station_position, calibration):
-    """Pinhole-camera forward projection of a world ENU point (meters)
-    into a station's pixel coordinates, given a StationCalibration-like
-    object (facing_deg/pitch_deg/roll_deg/fov_*_deg/image_*_px). Returns
-    None if the point is behind the camera."""
-    right, up, forward = camera_basis(
-        calibration.facing_deg, calibration.pitch_deg, calibration.roll_deg
-    )
-    v = tuple(world_point[i] - station_position[i] for i in range(3))
-
-    z_cam = _dot(v, forward)
-    if z_cam <= 0:
-        return None
-
-    x_cam = _dot(v, right)
-    y_cam = _dot(v, up)
-
-    half_w = z_cam * math.tan(math.radians(calibration.fov_horizontal_deg) / 2)
-    half_h = z_cam * math.tan(math.radians(calibration.fov_vertical_deg) / 2)
-    norm_x = x_cam / half_w
-    norm_y = y_cam / half_h
-
-    pixel_x = (norm_x + 1) / 2 * calibration.image_width_px
-    pixel_y = (1 - (norm_y + 1) / 2) * calibration.image_height_px
-    return pixel_x, pixel_y
 
 
 def rocket_trajectory(

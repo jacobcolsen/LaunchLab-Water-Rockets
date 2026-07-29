@@ -3,16 +3,20 @@ import math
 
 from django.test import TestCase
 
+from .optical_camera import (
+    camera_basis,
+    pixel_to_bearing_vector,
+    project_to_pixel,
+    solve_boresight_from_tap,
+)
 from .optical_mock import (
     NUM_DROPPED_FRAMES_PER_STATION,
     STATION_CLOCK_OFFSETS_MS,
-    camera_basis,
     flight_duration_s,
     generate_mock_tracking_session,
-    project_to_pixel,
     rocket_trajectory,
 )
-from .optical_models import FrameObservation, PixelObservation, StationCalibration
+from .optical_models import FrameObservation, PixelObservation, StationCalibration, TrackingStation
 
 
 def _calibration(facing_deg=0.0, pitch_deg=0.0, roll_deg=0.0, width=1920, height=1080, fov_h=60.0, fov_v=34.0):
@@ -26,6 +30,11 @@ def _calibration(facing_deg=0.0, pitch_deg=0.0, roll_deg=0.0, width=1920, height
         pitch_deg=pitch_deg,
         roll_deg=roll_deg,
     )
+
+
+def _normalize(v):
+    length = math.sqrt(sum(c * c for c in v))
+    return tuple(c / length for c in v)
 
 
 class CameraProjectionTests(TestCase):
@@ -59,6 +68,64 @@ class CameraProjectionTests(TestCase):
         self.assertAlmostEqual(sum(right[i] * up[i] for i in range(3)), 0.0, places=9)
         self.assertAlmostEqual(sum(right[i] * forward[i] for i in range(3)), 0.0, places=9)
         self.assertAlmostEqual(sum(up[i] * forward[i] for i in range(3)), 0.0, places=9)
+
+
+class PixelBearingRoundTripTests(TestCase):
+    def test_pixel_to_bearing_recovers_original_direction(self):
+        calibration = _calibration(facing_deg=30.0, pitch_deg=10.0, roll_deg=0.0)
+        station_position = (5.0, -2.0, 0.0)
+        for point in [(0.0, 20.0, 5.0), (10.0, 30.0, 15.0), (-8.0, 25.0, 2.0)]:
+            expected_direction = _normalize(tuple(point[i] - station_position[i] for i in range(3)))
+            pixel = project_to_pixel(point, station_position, calibration)
+            self.assertIsNotNone(pixel)
+            recovered_direction = pixel_to_bearing_vector(pixel[0], pixel[1], calibration)
+            for a, b in zip(expected_direction, recovered_direction):
+                self.assertAlmostEqual(a, b, places=6)
+
+    def test_pixel_to_bearing_round_trips_with_roll(self):
+        calibration = _calibration(facing_deg=200.0, pitch_deg=-15.0, roll_deg=12.0)
+        station_position = (0.0, 0.0, 0.0)
+        point = (-15.0, -40.0, 10.0)
+        expected_direction = _normalize(tuple(point[i] - station_position[i] for i in range(3)))
+        pixel = project_to_pixel(point, station_position, calibration)
+        recovered_direction = pixel_to_bearing_vector(pixel[0], pixel[1], calibration)
+        for a, b in zip(expected_direction, recovered_direction):
+            self.assertAlmostEqual(a, b, places=6)
+
+
+class SolveBoresightFromTapTests(TestCase):
+    def test_recovers_the_calibration_that_generated_the_tap(self):
+        # A tap of the pad, as it actually appears under some (possibly
+        # compass-noisy) calibration, should let us recover that exact
+        # calibration's facing/pitch from the station's known position
+        # alone - this is the whole point of the "refine accuracy" step.
+        station_position = (30.0, -10.0, 0.0)
+        true_direction = tuple(-p for p in station_position)  # pad at the origin
+
+        actual_facing_deg = 293.43
+        actual_pitch_deg = -3.0
+        calibration = _calibration(facing_deg=actual_facing_deg, pitch_deg=actual_pitch_deg)
+
+        tap_pixel = project_to_pixel((0.0, 0.0, 0.0), station_position, calibration)
+        self.assertIsNotNone(tap_pixel)
+
+        solved_facing, solved_pitch = solve_boresight_from_tap(
+            true_direction, tap_pixel[0], tap_pixel[1], calibration, pitch_hint_deg=actual_pitch_deg
+        )
+        self.assertAlmostEqual(solved_facing, actual_facing_deg, places=4)
+        self.assertAlmostEqual(solved_pitch, actual_pitch_deg, places=4)
+
+    def test_pitch_hint_disambiguates_the_correct_root(self):
+        station_position = (0.0, 40.0, 0.0)
+        true_direction = tuple(-p for p in station_position)
+        calibration = _calibration(facing_deg=180.0, pitch_deg=25.0)
+
+        tap_pixel = project_to_pixel((0.0, 0.0, 0.0), station_position, calibration)
+        solved_facing, solved_pitch = solve_boresight_from_tap(
+            true_direction, tap_pixel[0], tap_pixel[1], calibration, pitch_hint_deg=25.0
+        )
+        self.assertAlmostEqual(solved_facing, 180.0, places=4)
+        self.assertAlmostEqual(solved_pitch, 25.0, places=4)
 
 
 class RocketTrajectoryTests(TestCase):
@@ -181,6 +248,100 @@ class OpticalStationApiTests(TestCase):
         res = self.client.post(
             "/api/optical/stations/position/",
             data=json.dumps({"position_source": "mock"}),
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 400)
+
+
+class OpticalCalibrationApiTests(TestCase):
+    """Phase 3: camera calibration + geometry-based refinement endpoints."""
+
+    def setUp(self):
+        session_res = self.client.post(
+            "/api/optical/sessions/",
+            data=json.dumps({"name": "Calibration Test Session"}),
+            content_type="application/json",
+        )
+        self.session_id = session_res.json()["id"]
+
+    def _create_station(self, label, **fields):
+        res = self.client.post(
+            f"/api/optical/sessions/{self.session_id}/stations/",
+            data=json.dumps({"label": label, "position_source": "mock", **fields}),
+            content_type="application/json",
+        )
+        return res.json()
+
+    def _post_calibration(self, token, **overrides):
+        payload = {
+            "device_token": token,
+            "image_width_px": 1920,
+            "image_height_px": 1080,
+            "fov_horizontal_deg": 60.0,
+            "fov_vertical_deg": 34.0,
+            "facing_deg": 10.0,
+            "pitch_deg": 5.0,
+            "roll_deg": 0.0,
+            "orientation_source": "sensor",
+        }
+        payload.update(overrides)
+        return self.client.post(
+            "/api/optical/stations/calibration/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_calibration_post_creates_active_row_and_deactivates_previous(self):
+        token = self._create_station("Station A")["device_token"]
+
+        first = self._post_calibration(token)
+        self.assertEqual(first.status_code, 201, first.content)
+        self.assertTrue(first.json()["is_active"])
+
+        second = self._post_calibration(token, facing_deg=20.0)
+        self.assertEqual(second.status_code, 201, second.content)
+
+        station = TrackingStation.objects.get(device_token=token)
+        active = list(station.calibrations.filter(is_active=True))
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].facing_deg, 20.0)
+        self.assertEqual(station.calibrations.filter(is_active=False).count(), 1)
+
+    def test_refine_updates_facing_pitch_for_mock_station(self):
+        station_data = self._create_station(
+            "Station B", surveyed_x_m=30.0, surveyed_y_m=-10.0, surveyed_z_m=0.0
+        )
+        token = station_data["device_token"]
+
+        actual_facing_deg, actual_pitch_deg = 293.43, -3.0
+        self._post_calibration(token, facing_deg=actual_facing_deg, pitch_deg=actual_pitch_deg)
+
+        calibration = _calibration(facing_deg=actual_facing_deg, pitch_deg=actual_pitch_deg)
+        tap_pixel = project_to_pixel((0.0, 0.0, 0.0), (30.0, -10.0, 0.0), calibration)
+
+        res = self.client.post(
+            "/api/optical/stations/calibration/refine/",
+            data=json.dumps(
+                {"device_token": token, "tap_pixel_x": tap_pixel[0], "tap_pixel_y": tap_pixel[1]}
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 201, res.content)
+        data = res.json()
+        self.assertEqual(data["orientation_source"], "geometry_refined")
+        self.assertAlmostEqual(data["facing_deg"], actual_facing_deg, places=3)
+        self.assertAlmostEqual(data["pitch_deg"], actual_pitch_deg, places=3)
+
+    def test_refine_rejects_gps_source_station(self):
+        station_data = self._create_station(
+            "Station C", position_source="gps", gps_latitude=40.0, gps_longitude=-111.0
+        )
+        token = station_data["device_token"]
+        self._post_calibration(token)
+
+        res = self.client.post(
+            "/api/optical/stations/calibration/refine/",
+            data=json.dumps({"device_token": token, "tap_pixel_x": 960, "tap_pixel_y": 540}),
             content_type="application/json",
         )
         self.assertEqual(res.status_code, 400)

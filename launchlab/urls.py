@@ -30,6 +30,8 @@ from core.api import (
 )
 from core.optical_api import (
     TrackingSessionCreateView,
+    TrackingStationCalibrationRefineView,
+    TrackingStationCalibrationView,
     TrackingStationListCreateView,
     TrackingStationPositionView,
 )
@@ -108,5 +110,15 @@ urlpatterns = [
         'api/optical/stations/position/',
         TrackingStationPositionView.as_view(),
         name='api-optical-station-position',
+    ),
+    path(
+        'api/optical/stations/calibration/',
+        TrackingStationCalibrationView.as_view(),
+        name='api-optical-station-calibration',
+    ),
+    path(
+        'api/optical/stations/calibration/refine/',
+        TrackingStationCalibrationRefineView.as_view(),
+        name='api-optical-station-calibration-refine',
     ),
 ]

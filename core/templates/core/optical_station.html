@@ -27,6 +27,34 @@
     #save-btn { margin-top: 1.5rem; }
     #status-card .badge { margin-left: 0.5rem; }
     #status-summary { margin-top: 0.5rem; font-size: 1rem; }
+
+    #camera-setup-card h2 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    #camera-preview-wrap { position: relative; width: 100%; border-radius: 12px; overflow: hidden; background: #05070d; }
+    #camera-feed { width: 100%; display: block; }
+    #camera-preview-wrap.refine-mode { cursor: crosshair; }
+    #camera-crosshair {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 40px; height: 40px; pointer-events: none;
+    }
+    #camera-crosshair::before, #camera-crosshair::after {
+      content: ""; position: absolute; background: var(--accent-cyan);
+      box-shadow: 0 0 6px var(--accent-cyan-glow);
+    }
+    #camera-crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
+    #camera-crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
+    #live-orientation {
+      position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%);
+      background: rgba(11,15,26,0.65); padding: 0.25rem 0.75rem; border-radius: 999px;
+      font-size: 0.85rem; color: var(--accent-cyan); pointer-events: none; white-space: nowrap;
+    }
+    #tap-target {
+      position: absolute; width: 24px; height: 24px; border: 2px solid var(--accent-orange);
+      border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
+      box-shadow: 0 0 10px var(--accent-orange-glow);
+    }
+    #calibration-status { margin-top: 0.75rem; font-size: 0.95rem; }
+    #aim-captured { margin-top: 0.4rem; color: var(--accent-green); font-size: 0.85rem; }
+    #refine-unavailable { margin-top: 0.75rem; }
   </style>
 </head>
 <body>
@@ -93,6 +121,45 @@
       <p id="form-error" class="error" style="display:none;"></p>
       <button type="submit" id="save-btn" class="btn btn-primary">Save Position</button>
     </form>
+
+    <div id="camera-setup-card" class="card" style="display:none;">
+      <h2>Camera Setup</h2>
+
+      <div id="camera-permission-gate">
+        <p class="hint">Point this phone's camera roughly at the pad, then enable the camera and sensors.</p>
+        <button type="button" id="camera-enable-btn" class="btn btn-secondary">📷 Enable Camera &amp; Sensors</button>
+        <p id="camera-permission-error" class="error" style="display:none;"></p>
+      </div>
+
+      <div id="camera-scope" style="display:none;">
+        <div id="camera-preview-wrap">
+          <video id="camera-feed" autoplay playsinline muted></video>
+          <div id="camera-crosshair"></div>
+          <div id="live-orientation">facing --° · pitch --°</div>
+          <div id="tap-target" style="display:none;"></div>
+        </div>
+
+        <label for="fov_horizontal">Horizontal field of view (degrees, estimated)</label>
+        <input type="number" id="fov_horizontal" value="60" step="any">
+        <div class="field-hint">Most phone rear cameras are roughly 55-65°. Leave as-is if unsure.</div>
+
+        <button type="button" id="capture-aim-btn" class="btn btn-secondary">🎯 Capture Aim</button>
+        <div id="aim-captured"></div>
+
+        <button type="button" id="save-calibration-btn" class="btn btn-primary" disabled>Save Calibration</button>
+
+        <div id="calibration-status"></div>
+
+        <div id="refine-available" style="display:none;">
+          <button type="button" id="refine-btn" class="btn btn-secondary">🎯 Refine Accuracy (optional)</button>
+          <p class="hint" style="margin-top:0.5rem;">Tap exactly where the pad appears on screen.</p>
+        </div>
+        <div id="refine-unavailable" class="hint" style="display:none;">
+          Accuracy refinement isn't available yet for GPS/manual positions - it needs a
+          surveyed or mock position to compare against.
+        </div>
+      </div>
+    </div>
 
   <script>
     const sessionId = {{ session_id|default:"null" }};
@@ -173,6 +240,12 @@
       badge.className = `badge ${cls}`;
       badge.textContent = badgeLabel;
       document.getElementById('status-summary').textContent = formatSummary(station);
+
+      document.getElementById('camera-setup-card').style.display = 'block';
+      updateRefineAvailability(station);
+      if (station.latest_calibration) {
+        showCalibrationStatus(station.latest_calibration);
+      }
     }
 
     function prefillForm(station) {
@@ -200,6 +273,7 @@
       isEditing = true;
       prefillForm(cached);
       document.getElementById('status-card').style.display = 'none';
+      document.getElementById('camera-setup-card').style.display = 'none';
       document.getElementById('position-form').style.display = 'block';
     });
 
@@ -256,6 +330,154 @@
       localStorage.setItem(storageKey, JSON.stringify(data));
       isEditing = false;
       showStatus(data);
+    });
+
+    // --- Camera Setup (Phase 3: calibration) ---
+    let cameraStream = null;
+    let latestOrientation = { facing: null, pitch: null };
+    let capturedAim = null;
+    let refineTapMode = false;
+
+    const orientationSourceLabel = {
+      sensor: '📡 Sensor',
+      manual: '✏️ Manual',
+      geometry_refined: '🎯 Refined',
+    };
+
+    function updateRefineAvailability(station) {
+      const available = station.position_source === 'surveyed_enu' || station.position_source === 'mock';
+      document.getElementById('refine-available').style.display = available ? 'block' : 'none';
+      document.getElementById('refine-unavailable').style.display = available ? 'none' : 'block';
+    }
+
+    function showCalibrationStatus(calibration) {
+      const sourceLabel = orientationSourceLabel[calibration.orientation_source] || calibration.orientation_source;
+      document.getElementById('calibration-status').innerHTML =
+        `<span class="badge badge-green">Saved</span> ${sourceLabel} ` +
+        `· facing ${calibration.facing_deg.toFixed(1)}°, pitch ${calibration.pitch_deg.toFixed(1)}°`;
+    }
+
+    function persistCalibration(calibration) {
+      const cached = JSON.parse(localStorage.getItem(storageKey));
+      cached.latest_calibration = calibration;
+      localStorage.setItem(storageKey, JSON.stringify(cached));
+      showCalibrationStatus(calibration);
+    }
+
+    function startOrientationListener() {
+      window.addEventListener('deviceorientation', (event) => {
+        if (event.beta === null || event.beta === undefined) return;
+        const heading = (event.webkitCompassHeading !== undefined && event.webkitCompassHeading !== null)
+          ? event.webkitCompassHeading
+          : (event.alpha !== null ? (360 - event.alpha) % 360 : null);
+        latestOrientation.pitch = event.beta - 90;
+        latestOrientation.facing = heading;
+        if (latestOrientation.facing != null) {
+          document.getElementById('live-orientation').textContent =
+            `facing ${latestOrientation.facing.toFixed(0)}° · pitch ${latestOrientation.pitch.toFixed(1)}°`;
+        }
+      });
+    }
+
+    document.getElementById('camera-enable-btn').addEventListener('click', async () => {
+      const errorEl = document.getElementById('camera-permission-error');
+      errorEl.style.display = 'none';
+      try {
+        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+          const motionPerm = await DeviceOrientationEvent.requestPermission();
+          if (motionPerm !== 'granted') throw new Error('Motion sensor permission was denied.');
+        }
+        cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        document.getElementById('camera-feed').srcObject = cameraStream;
+        startOrientationListener();
+        document.getElementById('camera-permission-gate').style.display = 'none';
+        document.getElementById('camera-scope').style.display = 'block';
+      } catch (err) {
+        errorEl.textContent = `Could not enable camera/sensors: ${err.message}`;
+        errorEl.style.display = 'block';
+      }
+    });
+
+    document.getElementById('capture-aim-btn').addEventListener('click', () => {
+      if (latestOrientation.facing == null || latestOrientation.pitch == null) {
+        document.getElementById('aim-captured').textContent =
+          'No sensor reading yet - make sure motion & compass access is enabled.';
+        return;
+      }
+      capturedAim = { facing_deg: latestOrientation.facing, pitch_deg: latestOrientation.pitch };
+      document.getElementById('aim-captured').textContent =
+        `Captured: facing ${capturedAim.facing_deg.toFixed(1)}°, pitch ${capturedAim.pitch_deg.toFixed(1)}°`;
+      document.getElementById('save-calibration-btn').disabled = false;
+    });
+
+    document.getElementById('save-calibration-btn').addEventListener('click', async () => {
+      const cached = JSON.parse(localStorage.getItem(storageKey));
+      const video = document.getElementById('camera-feed');
+      const settings = cameraStream.getVideoTracks()[0].getSettings();
+      const width = settings.width || video.videoWidth;
+      const height = settings.height || video.videoHeight;
+      const fovH = parseFloat(document.getElementById('fov_horizontal').value);
+      const fovV = 2 * Math.atan(Math.tan((fovH * Math.PI / 180) / 2) * (height / width)) * 180 / Math.PI;
+
+      const res = await fetch('/api/optical/stations/calibration/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_token: cached.device_token,
+          image_width_px: width,
+          image_height_px: height,
+          fov_horizontal_deg: fovH,
+          fov_vertical_deg: fovV,
+          facing_deg: capturedAim.facing_deg,
+          pitch_deg: capturedAim.pitch_deg,
+          roll_deg: 0,
+          orientation_source: 'sensor',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('calibration-status').innerHTML =
+          `<span class="error">${data.detail || 'Save failed.'}</span>`;
+        return;
+      }
+      persistCalibration(data);
+    });
+
+    document.getElementById('refine-btn').addEventListener('click', () => {
+      refineTapMode = true;
+      document.getElementById('camera-preview-wrap').classList.add('refine-mode');
+    });
+
+    document.getElementById('camera-preview-wrap').addEventListener('click', async (e) => {
+      if (!refineTapMode) return;
+      refineTapMode = false;
+      document.getElementById('camera-preview-wrap').classList.remove('refine-mode');
+
+      const video = document.getElementById('camera-feed');
+      const rect = video.getBoundingClientRect();
+      const scaleX = video.videoWidth / rect.width;
+      const scaleY = video.videoHeight / rect.height;
+      const tapX = (e.clientX - rect.left) * scaleX;
+      const tapY = (e.clientY - rect.top) * scaleY;
+
+      const marker = document.getElementById('tap-target');
+      marker.style.left = `${e.clientX - rect.left}px`;
+      marker.style.top = `${e.clientY - rect.top}px`;
+      marker.style.display = 'block';
+
+      const cached = JSON.parse(localStorage.getItem(storageKey));
+      const res = await fetch('/api/optical/stations/calibration/refine/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ device_token: cached.device_token, tap_pixel_x: tapX, tap_pixel_y: tapY }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('calibration-status').innerHTML =
+          `<span class="error">${data.detail || 'Refine failed.'}</span>`;
+        return;
+      }
+      persistCalibration(data);
     });
 
     const cached = localStorage.getItem(storageKey);
