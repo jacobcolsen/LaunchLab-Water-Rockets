@@ -147,6 +147,12 @@ def generate_mock_tracking_session(name="Mock Flight", seed=42):
                 flight=tracking_flight,
                 frame_index=frame_index,
                 local_timestamp_ms=local_timestamp_ms,
+                # Simulates a station that ran Phase 5's clock sync
+                # perfectly, undoing the offset injected above - without
+                # this, the mock flight would have nothing for Phase 6's
+                # ray generation (which requires a synchronized timestamp)
+                # to work with.
+                synchronized_timestamp_ms=int(t_seconds * 1000),
                 image_width_px=calibration.image_width_px,
                 image_height_px=calibration.image_height_px,
             )

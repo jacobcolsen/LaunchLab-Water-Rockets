@@ -2,6 +2,7 @@ import json
 import math
 import time
 
+import numpy as np
 from django.test import TestCase
 
 from .optical_camera import (
@@ -22,8 +23,10 @@ from .optical_models import (
     PixelObservation,
     StationCalibration,
     TrackingFlight,
+    TrackingSession,
     TrackingStation,
 )
+from .optical_rays import _interp_bearing_series, generate_rays_for_flight
 
 
 def _calibration(facing_deg=0.0, pitch_deg=0.0, roll_deg=0.0, width=1920, height=1080, fov_h=60.0, fov_v=34.0):
@@ -595,3 +598,165 @@ class OpticalClockSyncApiTests(TestCase):
         frame1 = FrameObservation.objects.get(station=station, frame_index=1)
         self.assertEqual(frame0.synchronized_timestamp_ms, 1250)
         self.assertEqual(frame1.synchronized_timestamp_ms, 1283)
+
+
+def _make_tracking_station(session, label, index, x, y, z):
+    station = TrackingStation.objects.create(
+        session=session,
+        label=label,
+        station_index=index,
+        position_source=TrackingStation.SOURCE_MOCK,
+        surveyed_x_m=x,
+        surveyed_y_m=y,
+        surveyed_z_m=z,
+    )
+    StationCalibration.objects.create(
+        station=station,
+        image_width_px=1920,
+        image_height_px=1080,
+        fov_horizontal_deg=60.0,
+        fov_vertical_deg=34.0,
+        facing_deg=0.0,
+        pitch_deg=0.0,
+        roll_deg=0.0,
+        orientation_source=StationCalibration.ORIENTATION_SENSOR,
+        is_active=True,
+    )
+    return station
+
+
+def _add_pixel_observation(
+    session,
+    station,
+    flight,
+    frame_index,
+    synchronized_timestamp_ms,
+    pixel_x=960.0,
+    pixel_y=540.0,
+    local_timestamp_ms=None,
+):
+    frame = FrameObservation.objects.create(
+        session=session,
+        station=station,
+        flight=flight,
+        frame_index=frame_index,
+        local_timestamp_ms=local_timestamp_ms if local_timestamp_ms is not None else (synchronized_timestamp_ms or 0),
+        synchronized_timestamp_ms=synchronized_timestamp_ms,
+        image_width_px=1920,
+        image_height_px=1080,
+    )
+    PixelObservation.objects.create(
+        frame=frame,
+        pixel_x=pixel_x,
+        pixel_y=pixel_y,
+        observation_source=PixelObservation.SOURCE_MANUAL,
+        valid=True,
+        is_current=True,
+    )
+    return frame
+
+
+class InterpBearingSeriesTests(TestCase):
+    def test_interpolates_between_two_bearings_and_bounds_correctly(self):
+        series = [
+            (0, np.array([0.0, 1.0, 0.0])),
+            (1000, np.array([1.0, 0.0, 0.0])),
+        ]
+        grid_times = [-100, 0, 500, 1000, 1500]
+        results = _interp_bearing_series(series, grid_times)
+
+        self.assertIsNone(results[0])
+        self.assertIsNone(results[4])
+        for a, b in zip(results[1], [0.0, 1.0, 0.0]):
+            self.assertAlmostEqual(a, b, places=6)
+        for a, b in zip(results[3], [1.0, 0.0, 0.0]):
+            self.assertAlmostEqual(a, b, places=6)
+
+        expected_mid = np.array([0.5, 0.5, 0.0])
+        expected_mid = expected_mid / np.linalg.norm(expected_mid)
+        for a, b in zip(results[2], expected_mid):
+            self.assertAlmostEqual(a, b, places=6)
+
+    def test_fewer_than_two_points_returns_all_none(self):
+        results = _interp_bearing_series([(0, np.array([0.0, 1.0, 0.0]))], [0, 100])
+        self.assertEqual(results, [None, None])
+
+
+class GenerateRaysForFlightTests(TestCase):
+    def setUp(self):
+        self.session = TrackingSession.objects.create(name="Ray Gen Test")
+        self.flight = TrackingFlight.objects.create(session=self.session)
+
+    def test_stations_with_fewer_than_two_observations_are_excluded(self):
+        station_one_obs = _make_tracking_station(self.session, "OneObs", 1, 10.0, 0.0, 0.0)
+        _add_pixel_observation(self.session, station_one_obs, self.flight, 0, 0)
+
+        station_a = _make_tracking_station(self.session, "A", 2, 30.0, 0.0, 0.0)
+        _add_pixel_observation(self.session, station_a, self.flight, 0, 0)
+        _add_pixel_observation(self.session, station_a, self.flight, 1, 1000)
+
+        station_b = _make_tracking_station(self.session, "B", 3, -30.0, 0.0, 0.0)
+        _add_pixel_observation(self.session, station_b, self.flight, 0, 0)
+        _add_pixel_observation(self.session, station_b, self.flight, 1, 1000)
+
+        entries = generate_rays_for_flight(self.flight)
+        self.assertGreater(len(entries), 0)
+        participating_labels = {station.label for entry in entries for station, _, _ in entry["rays"]}
+        self.assertNotIn("OneObs", participating_labels)
+        self.assertIn("A", participating_labels)
+        self.assertIn("B", participating_labels)
+
+    def test_station_with_an_unsynced_observation_does_not_participate(self):
+        station_a = _make_tracking_station(self.session, "A", 1, 30.0, 0.0, 0.0)
+        _add_pixel_observation(self.session, station_a, self.flight, 0, 0)
+        _add_pixel_observation(self.session, station_a, self.flight, 1, 1000)
+
+        station_unsynced = _make_tracking_station(self.session, "Unsynced", 2, -30.0, 0.0, 0.0)
+        _add_pixel_observation(self.session, station_unsynced, self.flight, 0, 0)
+        _add_pixel_observation(
+            self.session, station_unsynced, self.flight, 1, None, local_timestamp_ms=1000
+        )
+
+        # Only station A has 2+ *synchronized* observations - Unsynced's
+        # second tap has no synchronized_timestamp_ms, so it only
+        # qualifies with 1, and 2+ qualifying stations are required.
+        entries = generate_rays_for_flight(self.flight)
+        self.assertEqual(entries, [])
+
+    def test_grid_range_is_the_overlap_of_qualifying_stations(self):
+        station_a = _make_tracking_station(self.session, "A", 1, 30.0, 0.0, 0.0)
+        _add_pixel_observation(self.session, station_a, self.flight, 0, 0)
+        _add_pixel_observation(self.session, station_a, self.flight, 1, 2000)
+
+        station_b = _make_tracking_station(self.session, "B", 2, -30.0, 0.0, 0.0)
+        _add_pixel_observation(self.session, station_b, self.flight, 0, 500)
+        _add_pixel_observation(self.session, station_b, self.flight, 1, 1500)
+
+        entries = generate_rays_for_flight(self.flight)
+        self.assertEqual(entries[0]["synchronized_timestamp_ms"], 500)
+        self.assertEqual(entries[-1]["synchronized_timestamp_ms"], 1500)
+
+
+class GenerateRaysForMockFlightTests(TestCase):
+    def test_generates_nonempty_grid_with_plausible_ray_directions(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        entries = generate_rays_for_flight(flight)
+        self.assertGreater(len(entries), 0)
+
+        # Pick an entry well away from the mock generator's deliberately
+        # corrupted frame (which sits at the flight's temporal midpoint)
+        # so this checks the interpolation/geometry math, not the known
+        # outlier fixture.
+        quarter_point = entries[len(entries) // 4]
+        self.assertGreaterEqual(len(quarter_point["rays"]), 2)
+
+        t_seconds = quarter_point["synchronized_timestamp_ms"] / 1000
+        true_point = np.array(rocket_trajectory(t_seconds))
+
+        for station, origin, direction in quarter_point["rays"]:
+            expected_direction = true_point - origin
+            expected_direction = expected_direction / np.linalg.norm(expected_direction)
+            cos_angle = np.clip(np.dot(direction, expected_direction), -1.0, 1.0)
+            angle_deg = math.degrees(math.acos(cos_angle))
+            self.assertLess(angle_deg, 2.0, station.label)
