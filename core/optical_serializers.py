@@ -5,6 +5,7 @@ from .optical_models import (
     FrameObservation,
     PixelObservation,
     StationCalibration,
+    TrackingFlight,
     TrackingQualityMetrics,
     TrackingSession,
     TrackingStation,
@@ -13,6 +14,12 @@ from .optical_models import (
 )
 
 SCHEMA_VERSION = "1.0"
+
+
+class TrackingFlightSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TrackingFlight
+        fields = ["id", "number", "name", "created_at"]
 
 
 class StationCalibrationSerializer(serializers.ModelSerializer):

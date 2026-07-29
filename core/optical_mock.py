@@ -20,6 +20,7 @@ from .optical_models import (
     FrameObservation,
     PixelObservation,
     StationCalibration,
+    TrackingFlight,
     TrackingSession,
     TrackingStation,
 )
@@ -117,6 +118,8 @@ def generate_mock_tracking_session(name="Mock Flight", seed=42):
         )
         stations.append((station, calibration))
 
+    tracking_flight = TrackingFlight.objects.create(session=session)
+
     duration_s = flight_duration_s()
     frame_dt = 1.0 / FRAME_RATE_HZ
     num_frames = int(duration_s / frame_dt) + 1
@@ -141,6 +144,7 @@ def generate_mock_tracking_session(name="Mock Flight", seed=42):
             frame = FrameObservation.objects.create(
                 session=session,
                 station=station,
+                flight=tracking_flight,
                 frame_index=frame_index,
                 local_timestamp_ms=local_timestamp_ms,
                 image_width_px=calibration.image_width_px,

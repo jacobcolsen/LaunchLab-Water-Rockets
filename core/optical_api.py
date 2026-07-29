@@ -5,9 +5,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .optical_camera import solve_boresight_from_tap
-from .optical_models import StationCalibration, TrackingSession, TrackingStation
+from .optical_models import (
+    FrameObservation,
+    PixelObservation,
+    StationCalibration,
+    TrackingFlight,
+    TrackingSession,
+    TrackingStation,
+)
 from .optical_serializers import (
     StationCalibrationSerializer,
+    TrackingFlightSerializer,
     TrackingSessionSerializer,
     TrackingStationCreateResponseSerializer,
     TrackingStationSerializer,
@@ -171,4 +179,81 @@ class TrackingStationCalibrationRefineView(APIView):
         )
         return Response(
             StationCalibrationSerializer(calibration).data, status=status.HTTP_201_CREATED
+        )
+
+
+class TrackingFlightListCreateView(generics.ListCreateAPIView):
+    serializer_class = TrackingFlightSerializer
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        return TrackingFlight.objects.filter(session_id=self.kwargs["session_id"])
+
+    def perform_create(self, serializer):
+        session = get_object_or_404(TrackingSession, pk=self.kwargs["session_id"])
+        serializer.save(session=session)
+
+
+class TrackingObservationUploadView(APIView):
+    """Batch upload of manually-tagged pixel observations for one flight.
+    The video itself never leaves the phone - only the tapped pixels and
+    their timestamps, matching the existing clinometer Sample upload's
+    'buffer locally, upload small derived data' pattern."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        device_token = request.data.get("device_token")
+        flight_number = request.data.get("flight_number")
+        image_width_px = request.data.get("image_width_px")
+        image_height_px = request.data.get("image_height_px")
+        observations = request.data.get("observations")
+
+        if not device_token or flight_number is None or not observations:
+            return Response(
+                {"detail": "device_token, flight_number, and observations are all required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        station = get_object_or_404(TrackingStation, device_token=device_token)
+        flight = get_object_or_404(TrackingFlight, session=station.session, number=flight_number)
+
+        frame_count = 0
+        pixel_count = 0
+        for entry in observations:
+            frame_index = entry.get("frame_index")
+            local_timestamp_ms = entry.get("local_timestamp_ms")
+            if frame_index is None or local_timestamp_ms is None:
+                continue
+
+            frame, _ = FrameObservation.objects.update_or_create(
+                station=station,
+                flight=flight,
+                frame_index=frame_index,
+                defaults={
+                    "session": station.session,
+                    "local_timestamp_ms": local_timestamp_ms,
+                    "image_width_px": image_width_px,
+                    "image_height_px": image_height_px,
+                },
+            )
+            frame_count += 1
+
+            pixel_x = entry.get("pixel_x")
+            pixel_y = entry.get("pixel_y")
+            if pixel_x is not None and pixel_y is not None:
+                PixelObservation.objects.filter(frame=frame, is_current=True).update(is_current=False)
+                PixelObservation.objects.create(
+                    frame=frame,
+                    pixel_x=pixel_x,
+                    pixel_y=pixel_y,
+                    observation_source=PixelObservation.SOURCE_MANUAL,
+                    valid=True,
+                )
+                pixel_count += 1
+
+        return Response(
+            {"frames": frame_count, "pixels": pixel_count}, status=status.HTTP_201_CREATED
         )

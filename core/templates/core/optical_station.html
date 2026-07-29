@@ -55,6 +55,19 @@
     #calibration-status { margin-top: 0.75rem; font-size: 0.95rem; }
     #aim-captured { margin-top: 0.4rem; color: var(--accent-green); font-size: 0.85rem; }
     #refine-unavailable { margin-top: 0.75rem; }
+
+    #record-card h2 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    #current-flight-display { font-size: 0.95rem; margin-bottom: 0.75rem; }
+    #playback-wrap { position: relative; width: 100%; border-radius: 12px; overflow: hidden; background: #05070d; cursor: crosshair; }
+    #playback-feed { width: 100%; display: block; }
+    .step-row { display: flex; gap: 0.6rem; }
+    .step-row .btn { flex: 1; }
+    #tag-counts { margin-top: 0.6rem; font-size: 0.9rem; color: var(--text-muted); }
+    #upload-status { margin-top: 0.75rem; font-size: 0.95rem; }
+    .obs-marker {
+      position: absolute; width: 20px; height: 20px; border: 2px solid var(--accent-green);
+      border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -158,6 +171,38 @@
           Accuracy refinement isn't available yet for GPS/manual positions - it needs a
           surveyed or mock position to compare against.
         </div>
+      </div>
+    </div>
+
+    <div id="record-card" class="card" style="display:none;">
+      <h2>Record &amp; Tag Flight</h2>
+      <div id="current-flight-display" class="hint">Loading…</div>
+      <button type="button" id="refresh-flight-btn" class="btn btn-secondary">🔄 Refresh Flight</button>
+
+      <div id="record-controls" style="margin-top: 1rem;">
+        <button type="button" id="start-recording-btn" class="btn btn-primary">⏺ Start Recording</button>
+        <button type="button" id="stop-recording-btn" class="btn btn-danger" style="display:none;">⏹ Stop Recording</button>
+        <div id="record-status" class="hint"></div>
+      </div>
+
+      <div id="review-controls" style="display:none;">
+        <div id="playback-wrap">
+          <video id="playback-feed" playsinline muted></video>
+        </div>
+
+        <div class="step-row">
+          <button type="button" id="step-back-btn" class="btn btn-secondary">⏮ Step Back</button>
+          <button type="button" id="step-forward-btn" class="btn btn-secondary">⏭ Step Forward</button>
+        </div>
+        <label for="frame-step">Step size (seconds)</label>
+        <input type="number" id="frame-step" value="0.033" step="any">
+
+        <p class="hint" style="margin-top:0.75rem;">Tap the video where the rocket is, or skip if it's not visible.</p>
+        <button type="button" id="skip-frame-btn" class="btn btn-secondary">⏭️ Skip (not visible)</button>
+        <div id="tag-counts">0 frames reviewed, 0 tagged</div>
+
+        <button type="button" id="upload-observations-btn" class="btn btn-primary">⬆️ Upload Observations</button>
+        <div id="upload-status"></div>
       </div>
     </div>
 
@@ -355,6 +400,8 @@
       document.getElementById('calibration-status').innerHTML =
         `<span class="badge badge-green">Saved</span> ${sourceLabel} ` +
         `· facing ${calibration.facing_deg.toFixed(1)}°, pitch ${calibration.pitch_deg.toFixed(1)}°`;
+      document.getElementById('record-card').style.display = 'block';
+      refreshCurrentFlight();
     }
 
     function persistCalibration(calibration) {
@@ -478,6 +525,136 @@
         return;
       }
       persistCalibration(data);
+    });
+
+    // --- Record & Tag Flight (Phase 4: manual observations) ---
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let taggedObservations = []; // {frame_index, local_timestamp_ms, pixel_x, pixel_y}
+    let nextFrameIndex = 0;
+    let currentFlightNumber = null;
+
+    async function refreshCurrentFlight() {
+      const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
+      const flights = await res.json();
+      const el = document.getElementById('current-flight-display');
+      if (flights.length === 0) {
+        currentFlightNumber = null;
+        el.textContent = 'No flight started yet - ask the operator to tap New Flight.';
+      } else {
+        currentFlightNumber = flights[flights.length - 1].number;
+        el.textContent = `Flight #${currentFlightNumber}`;
+      }
+    }
+
+    document.getElementById('refresh-flight-btn').addEventListener('click', refreshCurrentFlight);
+
+    document.getElementById('start-recording-btn').addEventListener('click', () => {
+      recordedChunks = [];
+      mediaRecorder = new MediaRecorder(cameraStream);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
+      };
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(recordedChunks, { type: recordedChunks[0]?.type || 'video/webm' });
+        const playback = document.getElementById('playback-feed');
+        playback.src = URL.createObjectURL(blob);
+        document.getElementById('record-controls').style.display = 'none';
+        document.getElementById('review-controls').style.display = 'block';
+      };
+      mediaRecorder.start();
+      document.getElementById('record-status').textContent = '⏺ Recording…';
+      document.getElementById('start-recording-btn').style.display = 'none';
+      document.getElementById('stop-recording-btn').style.display = 'block';
+    });
+
+    document.getElementById('stop-recording-btn').addEventListener('click', () => {
+      mediaRecorder.stop();
+      document.getElementById('record-status').textContent = '';
+      document.getElementById('stop-recording-btn').style.display = 'none';
+    });
+
+    function frameStepSeconds() {
+      return parseFloat(document.getElementById('frame-step').value) || (1 / 30);
+    }
+
+    document.getElementById('step-back-btn').addEventListener('click', () => {
+      const video = document.getElementById('playback-feed');
+      video.currentTime = Math.max(0, video.currentTime - frameStepSeconds());
+    });
+
+    document.getElementById('step-forward-btn').addEventListener('click', () => {
+      const video = document.getElementById('playback-feed');
+      video.currentTime = Math.min(video.duration || Infinity, video.currentTime + frameStepSeconds());
+    });
+
+    function updateTagCounts() {
+      const tagged = taggedObservations.filter((o) => o.pixel_x != null).length;
+      document.getElementById('tag-counts').textContent =
+        `${taggedObservations.length} frames reviewed, ${tagged} tagged`;
+    }
+
+    function recordObservation(pixelX, pixelY) {
+      const video = document.getElementById('playback-feed');
+      taggedObservations.push({
+        frame_index: nextFrameIndex++,
+        local_timestamp_ms: Math.round(video.currentTime * 1000),
+        pixel_x: pixelX,
+        pixel_y: pixelY,
+      });
+      updateTagCounts();
+    }
+
+    document.getElementById('playback-wrap').addEventListener('click', (e) => {
+      const video = document.getElementById('playback-feed');
+      const rect = video.getBoundingClientRect();
+      const scaleX = video.videoWidth / rect.width;
+      const scaleY = video.videoHeight / rect.height;
+      recordObservation((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
+
+      const marker = document.createElement('div');
+      marker.className = 'obs-marker';
+      marker.style.left = `${e.clientX - rect.left}px`;
+      marker.style.top = `${e.clientY - rect.top}px`;
+      document.getElementById('playback-wrap').appendChild(marker);
+      setTimeout(() => marker.remove(), 600);
+    });
+
+    document.getElementById('skip-frame-btn').addEventListener('click', () => {
+      recordObservation(null, null);
+      const video = document.getElementById('playback-feed');
+      video.currentTime = Math.min(video.duration || Infinity, video.currentTime + frameStepSeconds());
+    });
+
+    document.getElementById('upload-observations-btn').addEventListener('click', async () => {
+      const statusEl = document.getElementById('upload-status');
+      if (!currentFlightNumber) {
+        statusEl.innerHTML = '<span class="error">No flight started yet - tap Refresh Flight.</span>';
+        return;
+      }
+      const cached = JSON.parse(localStorage.getItem(storageKey));
+      const video = document.getElementById('playback-feed');
+      const res = await fetch('/api/optical/stations/observations/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_token: cached.device_token,
+          flight_number: currentFlightNumber,
+          image_width_px: video.videoWidth,
+          image_height_px: video.videoHeight,
+          observations: taggedObservations,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        statusEl.innerHTML = `<span class="error">${data.detail || 'Upload failed.'}</span>`;
+        return;
+      }
+      statusEl.innerHTML =
+        `<span class="badge badge-green">Uploaded</span> ${data.frames} frames, ${data.pixels} tagged.`;
+      taggedObservations = [];
+      nextFrameIndex = 0;
+      updateTagCounts();
     });
 
     const cached = localStorage.getItem(storageKey);

@@ -29,6 +29,8 @@ from core.api import (
     StationRecalibrateView,
 )
 from core.optical_api import (
+    TrackingFlightListCreateView,
+    TrackingObservationUploadView,
     TrackingSessionCreateView,
     TrackingStationCalibrationRefineView,
     TrackingStationCalibrationView,
@@ -120,5 +122,15 @@ urlpatterns = [
         'api/optical/stations/calibration/refine/',
         TrackingStationCalibrationRefineView.as_view(),
         name='api-optical-station-calibration-refine',
+    ),
+    path(
+        'api/optical/sessions/<int:session_id>/flights/',
+        TrackingFlightListCreateView.as_view(),
+        name='api-optical-flight-list-create',
+    ),
+    path(
+        'api/optical/stations/observations/',
+        TrackingObservationUploadView.as_view(),
+        name='api-optical-observation-upload',
     ),
 ]

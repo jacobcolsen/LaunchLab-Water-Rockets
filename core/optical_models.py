@@ -123,12 +123,38 @@ class StationCalibration(models.Model):
         return f"Calibration: {self.station.label} ({self.created_at:%Y-%m-%d %H:%M})"
 
 
+class TrackingFlight(models.Model):
+    """One launch attempt within a TrackingSession's day-long setup. Frame
+    numbering resets per flight (see FrameObservation) so stations don't
+    need to re-register position/calibration between attempts."""
+
+    session = models.ForeignKey(TrackingSession, related_name="flights", on_delete=models.CASCADE)
+    number = models.PositiveIntegerField(blank=True, null=True)
+    name = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("session", "number")
+        ordering = ["session", "number"]
+
+    def save(self, *args, **kwargs):
+        if self.number is None:
+            self.number = self.session.flights.count() + 1
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.session.name} — Flight {self.number}"
+
+
 class FrameObservation(models.Model):
     session = models.ForeignKey(
         TrackingSession, related_name="frame_observations", on_delete=models.CASCADE
     )
     station = models.ForeignKey(
         TrackingStation, related_name="frame_observations", on_delete=models.CASCADE
+    )
+    flight = models.ForeignKey(
+        TrackingFlight, related_name="frame_observations", on_delete=models.CASCADE
     )
     frame_index = models.PositiveIntegerField()
     local_timestamp_ms = models.BigIntegerField()
@@ -137,11 +163,11 @@ class FrameObservation(models.Model):
     image_height_px = models.PositiveIntegerField()
 
     class Meta:
-        unique_together = ("station", "frame_index")
-        ordering = ["station", "frame_index"]
+        unique_together = ("station", "flight", "frame_index")
+        ordering = ["station", "flight", "frame_index"]
 
     def __str__(self):
-        return f"{self.station.label} frame {self.frame_index}"
+        return f"{self.station.label} flight {self.flight.number} frame {self.frame_index}"
 
 
 class PixelObservation(models.Model):

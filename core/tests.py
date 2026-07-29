@@ -16,7 +16,13 @@ from .optical_mock import (
     generate_mock_tracking_session,
     rocket_trajectory,
 )
-from .optical_models import FrameObservation, PixelObservation, StationCalibration, TrackingStation
+from .optical_models import (
+    FrameObservation,
+    PixelObservation,
+    StationCalibration,
+    TrackingFlight,
+    TrackingStation,
+)
 
 
 def _calibration(facing_deg=0.0, pitch_deg=0.0, roll_deg=0.0, width=1920, height=1080, fov_h=60.0, fov_v=34.0):
@@ -345,3 +351,141 @@ class OpticalCalibrationApiTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(res.status_code, 400)
+
+
+class OpticalFlightAndObservationApiTests(TestCase):
+    """Phase 4: flight numbering + manual observation upload."""
+
+    def setUp(self):
+        session_res = self.client.post(
+            "/api/optical/sessions/",
+            data=json.dumps({"name": "Flight Test Session"}),
+            content_type="application/json",
+        )
+        self.session_id = session_res.json()["id"]
+        station_res = self.client.post(
+            f"/api/optical/sessions/{self.session_id}/stations/",
+            data=json.dumps({"label": "Station A", "position_source": "mock"}),
+            content_type="application/json",
+        )
+        self.token = station_res.json()["device_token"]
+
+    def _create_flight(self):
+        res = self.client.post(
+            f"/api/optical/sessions/{self.session_id}/flights/",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        return res.json()
+
+    def _upload(self, flight_number, observations, **overrides):
+        payload = {
+            "device_token": self.token,
+            "flight_number": flight_number,
+            "image_width_px": 1920,
+            "image_height_px": 1080,
+            "observations": observations,
+        }
+        payload.update(overrides)
+        return self.client.post(
+            "/api/optical/stations/observations/",
+            data=json.dumps(payload),
+            content_type="application/json",
+        )
+
+    def test_flight_numbers_auto_increment(self):
+        numbers = [self._create_flight()["number"] for _ in range(3)]
+        self.assertEqual(numbers, [1, 2, 3])
+
+    def test_upload_creates_frames_and_pixels_with_skips(self):
+        flight = self._create_flight()
+        observations = [
+            {"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": 100.0, "pixel_y": 200.0},
+            {"frame_index": 1, "local_timestamp_ms": 33, "pixel_x": None, "pixel_y": None},
+            {"frame_index": 2, "local_timestamp_ms": 66, "pixel_x": 110.0, "pixel_y": 210.0},
+        ]
+        res = self._upload(flight["number"], observations)
+        self.assertEqual(res.status_code, 201, res.content)
+        data = res.json()
+        self.assertEqual(data["frames"], 3)
+        self.assertEqual(data["pixels"], 2)
+
+        station = TrackingStation.objects.get(device_token=self.token)
+        self.assertEqual(FrameObservation.objects.filter(station=station).count(), 3)
+        self.assertEqual(PixelObservation.objects.filter(frame__station=station).count(), 2)
+        skipped_frame = FrameObservation.objects.get(station=station, frame_index=1)
+        self.assertEqual(skipped_frame.pixel_observations.count(), 0)
+
+    def test_retagging_same_frame_preserves_history(self):
+        flight = self._create_flight()
+        self._upload(
+            flight["number"],
+            [{"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": 100.0, "pixel_y": 200.0}],
+        )
+        self._upload(
+            flight["number"],
+            [{"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": 105.0, "pixel_y": 205.0}],
+        )
+
+        station = TrackingStation.objects.get(device_token=self.token)
+        frame = FrameObservation.objects.get(station=station, frame_index=0)
+        self.assertEqual(frame.pixel_observations.count(), 2)
+        current = frame.pixel_observations.filter(is_current=True)
+        self.assertEqual(current.count(), 1)
+        self.assertEqual(current.first().pixel_x, 105.0)
+
+    def test_frame_index_does_not_collide_across_flights(self):
+        flight1 = self._create_flight()
+        flight2 = self._create_flight()
+        for flight in (flight1, flight2):
+            res = self._upload(
+                flight["number"],
+                [{"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": 50.0, "pixel_y": 60.0}],
+            )
+            self.assertEqual(res.status_code, 201, res.content)
+
+        station = TrackingStation.objects.get(device_token=self.token)
+        self.assertEqual(FrameObservation.objects.filter(station=station, frame_index=0).count(), 2)
+        self.assertEqual(TrackingFlight.objects.filter(session_id=self.session_id).count(), 2)
+
+    def test_manual_observation_bearing_matches_generating_direction(self):
+        # Integration: tag a pixel corresponding to a known world direction
+        # under the station's active calibration, then confirm Phase 3's
+        # pixel_to_bearing_vector recovers that same direction from a real
+        # (non-mock) PixelObservation row.
+        self.client.post(
+            "/api/optical/stations/calibration/",
+            data=json.dumps(
+                {
+                    "device_token": self.token,
+                    "image_width_px": 1920,
+                    "image_height_px": 1080,
+                    "fov_horizontal_deg": 60.0,
+                    "fov_vertical_deg": 34.0,
+                    "facing_deg": 45.0,
+                    "pitch_deg": 10.0,
+                    "roll_deg": 0.0,
+                    "orientation_source": "sensor",
+                }
+            ),
+            content_type="application/json",
+        )
+        calibration = _calibration(facing_deg=45.0, pitch_deg=10.0)
+        world_point = (20.0, 30.0, 15.0)
+        pixel_x, pixel_y = project_to_pixel(world_point, (0.0, 0.0, 0.0), calibration)
+
+        flight = self._create_flight()
+        self._upload(
+            flight["number"],
+            [{"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": pixel_x, "pixel_y": pixel_y}],
+        )
+
+        station = TrackingStation.objects.get(device_token=self.token)
+        pixel_obs = PixelObservation.objects.get(frame__station=station, frame__frame_index=0)
+        active_calibration = station.calibrations.get(is_active=True)
+        recovered_direction = pixel_to_bearing_vector(
+            pixel_obs.pixel_x, pixel_obs.pixel_y, active_calibration
+        )
+        expected_direction = _normalize(world_point)
+        for a, b in zip(expected_direction, recovered_direction):
+            self.assertAlmostEqual(a, b, places=4)

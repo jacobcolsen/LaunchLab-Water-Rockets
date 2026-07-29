@@ -51,6 +51,14 @@
 
     <div class="card">
       <div class="roster-head">
+        <h2 style="margin:0;">Flights</h2>
+        <button type="button" id="new-flight-btn" class="btn btn-secondary">🚀 New Flight</button>
+      </div>
+      <p id="current-flight" class="hint" style="margin-top:0.5rem;">Loading…</p>
+    </div>
+
+    <div class="card">
+      <div class="roster-head">
         <h2 style="margin:0;">Station Roster</h2>
         <button type="button" id="refresh-btn" class="btn btn-secondary">🔄 Refresh</button>
       </div>
@@ -137,6 +145,26 @@
       document.getElementById('refresh-btn').addEventListener('click', loadRoster);
       loadRoster();
       setInterval(loadRoster, 5000);
+
+      async function loadFlights() {
+        const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
+        const flights = await res.json();
+        const el = document.getElementById('current-flight');
+        el.textContent = flights.length === 0
+          ? 'No flights yet - tap New Flight before the first launch attempt.'
+          : `Current flight: #${flights[flights.length - 1].number}`;
+      }
+
+      document.getElementById('new-flight-btn').addEventListener('click', async () => {
+        await fetch(`/api/optical/sessions/${sessionId}/flights/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({}),
+        });
+        loadFlights();
+      });
+
+      loadFlights();
     }
   </script>
 </body>
