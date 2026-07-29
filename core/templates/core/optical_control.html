@@ -1,0 +1,143 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Optical Tracking Control</title>
+  <link rel="stylesheet" href="{% static 'core/theme.css' %}">
+  <style>
+    body { max-width: 720px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+    .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+    .top-bar h1 { margin: 0; font-size: 1.5rem; }
+    .hint { color: var(--text-muted); margin-bottom: 1rem; }
+    .card { margin-bottom: 1.5rem; }
+    .card h2 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+    th, td { text-align: left; padding: 0.6rem 0.4rem; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
+
+    .join-row { display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: wrap; }
+    #join-url { font-weight: 700; color: var(--accent-cyan); word-break: break-all; }
+    #qr-code { width: 140px; height: 140px; border-radius: 12px; border: 1px solid var(--border); background: #fff; padding: 6px; }
+    .roster-head { display: flex; justify-content: space-between; align-items: center; }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <h1>📷 Optical Tracking Control</h1>
+  </div>
+  <p class="hint">Parallel to normal Launch Control — this sets up multi-camera position tracking. No camera access happens yet in this step.</p>
+
+  {% if not session_id %}
+    <div class="card card-accent">
+      <p class="hint">Create a tracking session to get started.</p>
+      <form id="create-session-form">
+        <input type="text" id="session-name" placeholder="Session name (e.g. Ward Activity 7/25)" required style="width: 100%; box-sizing: border-box; margin-bottom: 0.75rem;">
+        <button type="submit" class="btn btn-primary">Create Session</button>
+      </form>
+    </div>
+  {% else %}
+    <div class="card">
+      <h2>Join</h2>
+      <div class="join-row">
+        <img id="qr-code" alt="Scan to join">
+        <div>
+          <p class="hint" style="margin-bottom: 0.35rem;">Stations should open:</p>
+          <div id="join-url"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="roster-head">
+        <h2 style="margin:0;">Station Roster</h2>
+        <button type="button" id="refresh-btn" class="btn btn-secondary">🔄 Refresh</button>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Station</th><th>Position Source</th><th>Coordinates</th></tr>
+        </thead>
+        <tbody id="roster-body">
+          <tr><td colspan="3">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+
+  <script>
+    const sessionId = {{ session_id|default:"null" }};
+
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str == null ? '' : str;
+      return div.innerHTML;
+    }
+
+    if (!sessionId) {
+      document.getElementById('create-session-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('session-name').value;
+        const res = await fetch('/api/optical/sessions/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+        const data = await res.json();
+        window.location = `/optical/control?session=${data.id}`;
+      });
+    } else {
+      document.getElementById('join-url').textContent =
+        `${window.location.origin}/optical/station?session=${sessionId}`;
+      document.getElementById('qr-code').src = `/optical/sessions/${sessionId}/qr.png`;
+
+      const sourceBadge = {
+        gps: ['badge-green', '📍 GPS'],
+        manual: ['badge-cyan', '✏️ Manual'],
+        surveyed_enu: ['badge-orange', '📐 Surveyed'],
+        mock: ['badge-muted', '🧪 Mock'],
+      };
+
+      function formatCoordinates(station) {
+        if (station.position_source === 'gps' || station.position_source === 'manual') {
+          if (station.gps_latitude == null || station.gps_longitude == null) return '—';
+          return `${station.gps_latitude.toFixed(5)}, ${station.gps_longitude.toFixed(5)}`;
+        }
+        if (station.position_source === 'surveyed_enu') {
+          if (station.surveyed_x_m == null) return '—';
+          return `${station.surveyed_x_m.toFixed(1)}, ${station.surveyed_y_m.toFixed(1)}, ${station.surveyed_z_m.toFixed(1)} m`;
+        }
+        return '—';
+      }
+
+      function renderRoster(stations) {
+        const body = document.getElementById('roster-body');
+        if (stations.length === 0) {
+          body.innerHTML = '<tr><td colspan="3">No stations yet.</td></tr>';
+          return;
+        }
+        body.innerHTML = stations.map((s) => {
+          const [cls, label] = sourceBadge[s.position_source] || ['badge-muted', s.position_source];
+          return `
+            <tr>
+              <td>${escapeHtml(s.label)}</td>
+              <td><span class="badge ${cls}">${label}</span></td>
+              <td>${formatCoordinates(s)}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      async function loadRoster() {
+        const res = await fetch(`/api/optical/sessions/${sessionId}/stations/`);
+        const stations = await res.json();
+        renderRoster(stations);
+      }
+
+      document.getElementById('refresh-btn').addEventListener('click', loadRoster);
+      loadRoster();
+      setInterval(loadRoster, 5000);
+    }
+  </script>
+</body>
+</html>

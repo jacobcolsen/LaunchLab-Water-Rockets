@@ -1,3 +1,4 @@
+import json
 import math
 
 from django.test import TestCase
@@ -114,3 +115,72 @@ class MockTrackingSessionGeneratorTests(TestCase):
 
     def test_session_is_flagged_simulated(self):
         self.assertTrue(self.session.is_simulated)
+
+
+class OpticalStationApiTests(TestCase):
+    """Phase 2: station setup + position entry endpoints."""
+
+    def setUp(self):
+        res = self.client.post(
+            "/api/optical/sessions/",
+            data=json.dumps({"name": "Test Session"}),
+            content_type="application/json",
+        )
+        self.session_id = res.json()["id"]
+
+    def _create_station(self, label, **fields):
+        return self.client.post(
+            f"/api/optical/sessions/{self.session_id}/stations/",
+            data=json.dumps({"label": label, "position_source": "mock", **fields}),
+            content_type="application/json",
+        )
+
+    def test_station_index_auto_increments_with_no_upper_bound(self):
+        indices = [self._create_station(f"Station {i}").json()["station_index"] for i in range(5)]
+        self.assertEqual(indices, [1, 2, 3, 4, 5])
+
+    def test_create_response_includes_token_but_list_does_not(self):
+        create_data = self._create_station("Station A").json()
+        self.assertIn("device_token", create_data)
+
+        list_res = self.client.get(f"/api/optical/sessions/{self.session_id}/stations/")
+        self.assertEqual(list_res.status_code, 200)
+        for station in list_res.json():
+            self.assertNotIn("device_token", station)
+
+    def test_manual_source_requires_latitude_and_longitude(self):
+        res = self._create_station("Station B", position_source="manual")
+        self.assertEqual(res.status_code, 400)
+
+    def test_surveyed_source_requires_xyz(self):
+        res = self._create_station("Station C", position_source="surveyed_enu", surveyed_x_m=1.0)
+        self.assertEqual(res.status_code, 400)
+
+    def test_position_endpoint_updates_the_right_station_by_token(self):
+        token = self._create_station("Station D").json()["device_token"]
+
+        res = self.client.post(
+            "/api/optical/stations/position/",
+            data=json.dumps(
+                {
+                    "device_token": token,
+                    "position_source": "surveyed_enu",
+                    "surveyed_x_m": 12.0,
+                    "surveyed_y_m": -5.0,
+                    "surveyed_z_m": 0.0,
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 200, res.content)
+        data = res.json()
+        self.assertEqual(data["position_source"], "surveyed_enu")
+        self.assertEqual(data["surveyed_x_m"], 12.0)
+
+    def test_position_endpoint_requires_device_token(self):
+        res = self.client.post(
+            "/api/optical/stations/position/",
+            data=json.dumps({"position_source": "mock"}),
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 400)

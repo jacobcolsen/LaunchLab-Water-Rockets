@@ -28,6 +28,16 @@ from core.api import (
     StationListCreateView,
     StationRecalibrateView,
 )
+from core.optical_api import (
+    TrackingSessionCreateView,
+    TrackingStationListCreateView,
+    TrackingStationPositionView,
+)
+from core.optical_views import (
+    optical_control_view,
+    optical_station_qr_view,
+    optical_station_view,
+)
 from core.views import control_view, health, station_qr_view, station_view
 
 urlpatterns = [
@@ -76,5 +86,27 @@ urlpatterns = [
         'api/stations/recalibrate/',
         StationRecalibrateView.as_view(),
         name='api-station-recalibrate',
+    ),
+    path('optical/control', optical_control_view, name='optical-control'),
+    path('optical/station', optical_station_view, name='optical-station'),
+    path(
+        'optical/sessions/<int:session_id>/qr.png',
+        optical_station_qr_view,
+        name='optical-station-qr',
+    ),
+    path(
+        'api/optical/sessions/',
+        TrackingSessionCreateView.as_view(),
+        name='api-optical-session-create',
+    ),
+    path(
+        'api/optical/sessions/<int:session_id>/stations/',
+        TrackingStationListCreateView.as_view(),
+        name='api-optical-station-list-create',
+    ),
+    path(
+        'api/optical/stations/position/',
+        TrackingStationPositionView.as_view(),
+        name='api-optical-station-position',
     ),
 ]

@@ -36,6 +36,12 @@ class StationCalibrationSerializer(serializers.ModelSerializer):
 
 
 class TrackingStationSerializer(serializers.ModelSerializer):
+    # device_token deliberately excluded - this is the public shape used by
+    # the control page's station roster, which every joined phone can read.
+    # Only the station's own create/position-update response (see
+    # TrackingStationCreateResponseSerializer below) includes its token,
+    # mirroring StationSerializer/StationCreateResponseSerializer's split
+    # in core/serializers.py.
     calibrations = StationCalibrationSerializer(many=True, read_only=True)
 
     class Meta:
@@ -44,7 +50,6 @@ class TrackingStationSerializer(serializers.ModelSerializer):
             "id",
             "label",
             "station_index",
-            "device_token",
             "position_source",
             "gps_latitude",
             "gps_longitude",
@@ -56,6 +61,38 @@ class TrackingStationSerializer(serializers.ModelSerializer):
             "created_at",
             "calibrations",
         ]
+
+
+POSITION_REQUIRED_FIELDS = {
+    TrackingStation.SOURCE_GPS: ["gps_latitude", "gps_longitude"],
+    TrackingStation.SOURCE_MANUAL: ["gps_latitude", "gps_longitude"],
+    TrackingStation.SOURCE_SURVEYED: ["surveyed_x_m", "surveyed_y_m", "surveyed_z_m"],
+    TrackingStation.SOURCE_MOCK: [],
+}
+
+
+class TrackingStationCreateResponseSerializer(TrackingStationSerializer):
+    # station_index is always server-assigned (sequential, no hard-coded
+    # station count) - never accepted from the client.
+    class Meta(TrackingStationSerializer.Meta):
+        fields = TrackingStationSerializer.Meta.fields + ["device_token"]
+        read_only_fields = ["station_index"]
+
+    def validate(self, data):
+        position_source = data.get(
+            "position_source",
+            self.instance.position_source if self.instance else TrackingStation.SOURCE_MOCK,
+        )
+        required = POSITION_REQUIRED_FIELDS.get(position_source)
+        if required is None:
+            raise serializers.ValidationError(f"Unknown position_source '{position_source}'.")
+        missing = [f for f in required if data.get(f) is None]
+        if missing:
+            raise serializers.ValidationError(
+                f"Missing required field(s) for position_source '{position_source}': "
+                f"{', '.join(missing)}."
+            )
+        return data
 
 
 class PixelObservationSerializer(serializers.ModelSerializer):

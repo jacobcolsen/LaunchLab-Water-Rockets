@@ -1,0 +1,268 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Optical Tracking Station</title>
+  <link rel="stylesheet" href="{% static 'core/theme.css' %}">
+  <style>
+    body { max-width: 480px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+    h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
+    .hint { color: var(--text-muted); margin-bottom: 1.25rem; }
+    .error { color: var(--accent-red); }
+    label { display: block; margin-top: 0.9rem; font-weight: 700; font-size: 0.9rem; color: var(--text-muted); }
+    input[type="text"], input[type="number"], select {
+      width: 100%; margin-top: 0.3rem; box-sizing: border-box;
+    }
+    select {
+      font-family: inherit; font-size: 1rem; padding: 0.6rem 0.75rem; border-radius: 10px;
+      border: 1px solid var(--border); background: var(--surface-elevated); color: var(--text-primary);
+    }
+    .field-hint { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.2rem; }
+    .source-fields { display: none; }
+    .source-fields.active { display: block; }
+    #gps-captured { margin-top: 0.5rem; color: var(--accent-green); font-size: 0.9rem; }
+    .btn { margin-top: 1rem; width: 100%; }
+    #save-btn { margin-top: 1.5rem; }
+    #status-card .badge { margin-left: 0.5rem; }
+    #status-summary { margin-top: 0.5rem; font-size: 1rem; }
+  </style>
+</head>
+<body>
+  {% if not session_id %}
+    <p class="error">No session specified. Ask the tracking operator for the join link.</p>
+  {% else %}
+    <h1>📷 Optical Tracking Station</h1>
+    <p class="hint">Set this phone's position. No camera setup yet — that's a later step.</p>
+
+    <div id="status-card" class="card card-accent" style="display:none;">
+      <div><strong id="status-label"></strong> <span id="status-badge" class="badge"></span></div>
+      <div id="status-summary"></div>
+      <button type="button" id="edit-btn" class="btn btn-secondary">✏️ Edit Position</button>
+    </div>
+
+    <div id="edit-confirm" class="confirm-overlay">
+      <div class="confirm-box card">
+        <p>Update this station's saved position?</p>
+        <button type="button" id="edit-confirm-yes" class="btn btn-danger">Yes, Edit</button>
+        <button type="button" id="edit-confirm-cancel" class="btn btn-secondary">Cancel</button>
+      </div>
+    </div>
+
+    <form id="position-form" class="card">
+      <label for="label">Your name / station label</label>
+      <input type="text" id="label" required>
+
+      <label for="position_source">How do you know your position?</label>
+      <select id="position_source">
+        <option value="gps">📍 Use my phone's GPS</option>
+        <option value="manual">✏️ Enter latitude/longitude manually</option>
+        <option value="surveyed_enu">📐 Enter a measured offset from the pad (meters)</option>
+        <option value="mock">🧪 Just testing — use a placeholder</option>
+      </select>
+
+      <div class="source-fields" data-source="gps">
+        <button type="button" id="gps-capture-btn" class="btn btn-secondary">📍 Capture My GPS Location</button>
+        <div id="gps-captured"></div>
+      </div>
+
+      <div class="source-fields" data-source="manual">
+        <label for="manual_latitude">Latitude</label>
+        <input type="number" id="manual_latitude" step="any">
+        <label for="manual_longitude">Longitude</label>
+        <input type="number" id="manual_longitude" step="any">
+      </div>
+
+      <div class="source-fields" data-source="surveyed_enu">
+        <label for="surveyed_x">East of the pad (meters)</label>
+        <input type="number" id="surveyed_x" step="any">
+        <div id="surveyed-x-hint" class="field-hint"></div>
+        <label for="surveyed_y">North of the pad (meters)</label>
+        <input type="number" id="surveyed_y" step="any">
+        <div id="surveyed-y-hint" class="field-hint"></div>
+        <label for="surveyed_z">Height above the pad (meters, usually 0)</label>
+        <input type="number" id="surveyed_z" step="any" value="0">
+        <div id="surveyed-z-hint" class="field-hint"></div>
+      </div>
+
+      <div class="source-fields" data-source="mock">
+        <p class="hint" style="margin-top: 0.75rem;">Testing only — this station won't have a real position.</p>
+      </div>
+
+      <p id="form-error" class="error" style="display:none;"></p>
+      <button type="submit" id="save-btn" class="btn btn-primary">Save Position</button>
+    </form>
+
+  <script>
+    const sessionId = {{ session_id|default:"null" }};
+    const storageKey = `optical-station-${sessionId}`;
+    let isEditing = false;
+    let capturedGps = null;
+
+    const sourceBadge = {
+      gps: ['badge-green', '📍 GPS'],
+      manual: ['badge-cyan', '✏️ Manual'],
+      surveyed_enu: ['badge-orange', '📐 Surveyed'],
+      mock: ['badge-muted', '🧪 Mock'],
+    };
+
+    function metersToFeetHint(id, value) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const n = parseFloat(value);
+      el.textContent = Number.isFinite(n) ? `≈ ${(n * 3.281).toFixed(1)} ft` : '';
+    }
+
+    function showSourceFields(source) {
+      document.querySelectorAll('.source-fields').forEach((el) => {
+        el.classList.toggle('active', el.dataset.source === source);
+      });
+    }
+
+    document.getElementById('position_source').addEventListener('change', (e) => {
+      showSourceFields(e.target.value);
+    });
+    showSourceFields(document.getElementById('position_source').value);
+
+    ['surveyed_x', 'surveyed_y', 'surveyed_z'].forEach((id) => {
+      document.getElementById(id).addEventListener('input', (e) => {
+        metersToFeetHint(`${id.replace('surveyed_', 'surveyed-')}-hint`, e.target.value);
+      });
+    });
+
+    document.getElementById('gps-capture-btn').addEventListener('click', () => {
+      if (!navigator.geolocation) {
+        document.getElementById('gps-captured').textContent = 'GPS is not available on this device.';
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          capturedGps = {
+            gps_latitude: pos.coords.latitude,
+            gps_longitude: pos.coords.longitude,
+            gps_altitude_m: pos.coords.altitude,
+          };
+          document.getElementById('gps-captured').textContent =
+            `Captured: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+        },
+        (err) => {
+          document.getElementById('gps-captured').textContent = `Could not get location: ${err.message}`;
+        },
+        { enableHighAccuracy: true, timeout: 15000 }
+      );
+    });
+
+    function formatSummary(station) {
+      if (station.position_source === 'gps' || station.position_source === 'manual') {
+        if (station.gps_latitude == null || station.gps_longitude == null) return 'No coordinates saved.';
+        return `${station.gps_latitude.toFixed(5)}, ${station.gps_longitude.toFixed(5)}`;
+      }
+      if (station.position_source === 'surveyed_enu') {
+        return `${station.surveyed_x_m.toFixed(1)}, ${station.surveyed_y_m.toFixed(1)}, ${station.surveyed_z_m.toFixed(1)} m from the pad`;
+      }
+      return 'No real position — testing only.';
+    }
+
+    function showStatus(station) {
+      document.getElementById('position-form').style.display = 'none';
+      document.getElementById('status-card').style.display = 'block';
+      document.getElementById('status-label').textContent = station.label;
+      const [cls, badgeLabel] = sourceBadge[station.position_source] || ['badge-muted', station.position_source];
+      const badge = document.getElementById('status-badge');
+      badge.className = `badge ${cls}`;
+      badge.textContent = badgeLabel;
+      document.getElementById('status-summary').textContent = formatSummary(station);
+    }
+
+    function prefillForm(station) {
+      document.getElementById('label').value = station.label;
+      document.getElementById('position_source').value = station.position_source;
+      showSourceFields(station.position_source);
+      if (station.gps_latitude != null) document.getElementById('manual_latitude').value = station.gps_latitude;
+      if (station.gps_longitude != null) document.getElementById('manual_longitude').value = station.gps_longitude;
+      if (station.surveyed_x_m != null) document.getElementById('surveyed_x').value = station.surveyed_x_m;
+      if (station.surveyed_y_m != null) document.getElementById('surveyed_y').value = station.surveyed_y_m;
+      if (station.surveyed_z_m != null) document.getElementById('surveyed_z').value = station.surveyed_z_m;
+      capturedGps = null;
+      document.getElementById('gps-captured').textContent = '';
+    }
+
+    document.getElementById('edit-btn').addEventListener('click', () => {
+      document.getElementById('edit-confirm').style.display = 'flex';
+    });
+    document.getElementById('edit-confirm-cancel').addEventListener('click', () => {
+      document.getElementById('edit-confirm').style.display = 'none';
+    });
+    document.getElementById('edit-confirm-yes').addEventListener('click', () => {
+      document.getElementById('edit-confirm').style.display = 'none';
+      const cached = JSON.parse(localStorage.getItem(storageKey));
+      isEditing = true;
+      prefillForm(cached);
+      document.getElementById('status-card').style.display = 'none';
+      document.getElementById('position-form').style.display = 'block';
+    });
+
+    document.getElementById('position-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const errorEl = document.getElementById('form-error');
+      errorEl.style.display = 'none';
+
+      const positionSource = document.getElementById('position_source').value;
+      const payload = {
+        label: document.getElementById('label').value,
+        position_source: positionSource,
+      };
+
+      if (positionSource === 'gps') {
+        if (!capturedGps) {
+          errorEl.textContent = 'Tap "Capture My GPS Location" first.';
+          errorEl.style.display = 'block';
+          return;
+        }
+        Object.assign(payload, capturedGps);
+      } else if (positionSource === 'manual') {
+        payload.gps_latitude = parseFloat(document.getElementById('manual_latitude').value);
+        payload.gps_longitude = parseFloat(document.getElementById('manual_longitude').value);
+      } else if (positionSource === 'surveyed_enu') {
+        payload.surveyed_x_m = parseFloat(document.getElementById('surveyed_x').value);
+        payload.surveyed_y_m = parseFloat(document.getElementById('surveyed_y').value);
+        payload.surveyed_z_m = parseFloat(document.getElementById('surveyed_z').value || '0');
+      }
+
+      let res;
+      if (isEditing) {
+        const cached = JSON.parse(localStorage.getItem(storageKey));
+        res = await fetch('/api/optical/stations/position/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ device_token: cached.device_token, ...payload }),
+        });
+      } else {
+        res = await fetch(`/api/optical/sessions/${sessionId}/stations/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+      }
+
+      const data = await res.json();
+      if (!res.ok) {
+        errorEl.textContent = data.detail || JSON.stringify(data);
+        errorEl.style.display = 'block';
+        return;
+      }
+
+      localStorage.setItem(storageKey, JSON.stringify(data));
+      isEditing = false;
+      showStatus(data);
+    });
+
+    const cached = localStorage.getItem(storageKey);
+    if (cached) {
+      showStatus(JSON.parse(cached));
+    }
+  </script>
+  {% endif %}
+</body>
+</html>
