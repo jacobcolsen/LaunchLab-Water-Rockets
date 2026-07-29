@@ -90,3 +90,8 @@ class Result(models.Model):
 
     def __str__(self):
         return f"Result: {self.launch} = {self.best_altitude_ft} ft"
+
+
+# Parallel optical multi-camera tracking subsystem - see optical_models.py.
+# Imported here so Django's app registry/migrations pick up its models too.
+from .optical_models import *  # noqa: E402,F401,F403

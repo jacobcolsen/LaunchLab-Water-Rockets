@@ -51,3 +51,7 @@ class SampleAdmin(admin.ModelAdmin):
 @admin.register(Result)
 class ResultAdmin(admin.ModelAdmin):
     list_display = ("launch", "best_altitude_ft", "method", "computed_at")
+
+
+# Parallel optical multi-camera tracking subsystem - see optical_admin.py.
+from . import optical_admin  # noqa: E402,F401
