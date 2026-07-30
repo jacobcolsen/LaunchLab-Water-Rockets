@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from .optical_debrief import compute_derived_flight_data
 from .optical_models import (
     FlightEvent,
     FrameObservation,
@@ -234,28 +235,39 @@ def export_tracking_session(session: TrackingSession) -> dict:
             frames_by_station.get(station_data["id"], []), many=True
         ).data
 
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "session": session_data,
-        "triangulated_points": TriangulatedPointSerializer(
-            session.triangulated_points.all(), many=True
-        ).data,
-        "trajectory_points": TrajectoryPointSerializer(
-            session.trajectory_points.all(), many=True
-        ).data,
-        "flight_events": FlightEventSerializer(session.flight_events.all(), many=True).data,
-        # Quality metrics are per-flight (a session can have several - see
-        # TrackingFlight, Phase 4), not per-session, so this is a list
-        # rather than a single lookup.
-        "quality_metrics": [
+    # Derived data (triangulated points, trajectory, events, quality,
+    # stats) is nested per-flight - a session can have several flights
+    # (Phase 4), and each of these lists would otherwise collide across
+    # them exactly like FrameObservation/TriangulatedPoint/TrajectoryPoint/
+    # FlightEvent/TrackingQualityMetrics all once did before being fixed
+    # (Phases 4, 7, 8, 10, 11). Station/frame-observation data above stays
+    # session-wide deliberately - a station's raw observations legitimately
+    # span its whole session-long involvement, not one flight.
+    flights_data = []
+    for flight in session.flights.order_by("number"):
+        flights_data.append(
             {
                 "flight_number": flight.number,
-                "metrics": (
+                "triangulated_points": TriangulatedPointSerializer(
+                    flight.triangulated_points.all(), many=True
+                ).data,
+                "trajectory_points": TrajectoryPointSerializer(
+                    flight.trajectory_points.all(), many=True
+                ).data,
+                "flight_events": FlightEventSerializer(
+                    flight.flight_events.all(), many=True
+                ).data,
+                "quality_metrics": (
                     TrackingQualityMetricsSerializer(flight.quality_metrics).data
                     if hasattr(flight, "quality_metrics")
                     else None
                 ),
+                "derived_stats": compute_derived_flight_data(flight),
             }
-            for flight in session.flights.all()
-        ],
+        )
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "session": session_data,
+        "flights": flights_data,
     }

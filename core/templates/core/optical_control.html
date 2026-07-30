@@ -21,6 +21,22 @@
     #join-url { font-weight: 700; color: var(--accent-cyan); word-break: break-all; }
     #qr-code { width: 140px; height: 140px; border-radius: 12px; border: 1px solid var(--border); background: #fff; padding: 6px; }
     .roster-head { display: flex; justify-content: space-between; align-items: center; }
+
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+    .stat-grid > div { background: var(--surface-elevated); border-radius: 12px; padding: 0.6rem 0.75rem; }
+    .stat-label { display: block; font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.03em; }
+    .stat-value { display: block; font-size: 1.15rem; font-weight: 700; margin-top: 0.15rem; }
+    #summary-modal { align-items: flex-start; overflow-y: auto; padding: 2rem 1rem 4rem; }
+    #summary-modal .confirm-box { max-width: 640px; width: 100%; text-align: left; }
+    #summary-modal h2 { margin: 0; font-size: 1.2rem; text-transform: none; letter-spacing: normal; color: var(--text-primary); }
+    .summary-section-title { margin-top: 1.25rem; font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    #summary-chart-canvas { width: 100%; border-radius: 12px; background: #05070d; margin-top: 0.5rem; }
+    .summary-limitations {
+      margin-top: 0.75rem; padding: 0.75rem 1rem; border-radius: 12px;
+      background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); font-size: 0.9rem;
+    }
+    #summary-events-list { margin-top: 0.5rem; font-size: 0.9rem; padding: 0; }
+    #summary-events-list li { padding: 0.3rem 0; border-bottom: 1px solid var(--border); list-style: none; }
   </style>
 </head>
 <body>
@@ -54,7 +70,14 @@
         <h2 style="margin:0;">Flights</h2>
         <button type="button" id="new-flight-btn" class="btn btn-secondary">🚀 New Flight</button>
       </div>
-      <p id="current-flight" class="hint" style="margin-top:0.5rem;">Loading…</p>
+      <table>
+        <thead>
+          <tr><th>Flight</th><th></th></tr>
+        </thead>
+        <tbody id="flights-body">
+          <tr><td colspan="2">Loading…</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <div class="card">
@@ -70,6 +93,33 @@
           <tr><td colspan="3">Loading…</td></tr>
         </tbody>
       </table>
+    </div>
+
+    <div class="card">
+      <div class="roster-head">
+        <h2 style="margin:0;">Export</h2>
+        <button type="button" id="export-btn" class="btn btn-secondary">⬇️ Export Session Data (JSON)</button>
+      </div>
+      <p class="hint" style="margin-top:0.5rem;">Downloads everything recorded for this session as one JSON file.</p>
+    </div>
+
+    <div id="summary-modal" class="confirm-overlay">
+      <div class="confirm-box card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2 id="summary-title">Flight Summary</h2>
+          <button type="button" id="summary-close-btn" class="btn-icon">✕</button>
+        </div>
+        <div id="summary-body">
+          <div class="stat-grid" id="summary-stat-grid"></div>
+          <div class="summary-section-title">Height Over Time</div>
+          <canvas id="summary-chart-canvas" width="600" height="240"></canvas>
+          <div class="summary-section-title">Flight Events</div>
+          <ul id="summary-events-list"></ul>
+          <div class="summary-section-title">Quality</div>
+          <p id="summary-quality-line" class="hint"></p>
+          <div id="summary-limitations" class="summary-limitations" style="display:none;"></div>
+        </div>
+      </div>
     </div>
   {% endif %}
 
@@ -146,13 +196,27 @@
       loadRoster();
       setInterval(loadRoster, 5000);
 
+      function renderFlightsTable(flights) {
+        const body = document.getElementById('flights-body');
+        if (flights.length === 0) {
+          body.innerHTML = '<tr><td colspan="2">No flights yet - tap New Flight before the first launch attempt.</td></tr>';
+          return;
+        }
+        body.innerHTML = flights.map((f) => `
+          <tr>
+            <td>Flight #${f.number}</td>
+            <td><button type="button" class="btn btn-secondary summary-btn" data-flight-id="${f.id}" data-flight-number="${f.number}">📊 Summary</button></td>
+          </tr>
+        `).join('');
+        document.querySelectorAll('.summary-btn').forEach((btn) => {
+          btn.addEventListener('click', () => openFlightSummary(btn.dataset.flightId, btn.dataset.flightNumber));
+        });
+      }
+
       async function loadFlights() {
         const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
         const flights = await res.json();
-        const el = document.getElementById('current-flight');
-        el.textContent = flights.length === 0
-          ? 'No flights yet - tap New Flight before the first launch attempt.'
-          : `Current flight: #${flights[flights.length - 1].number}`;
+        renderFlightsTable(flights);
       }
 
       document.getElementById('new-flight-btn').addEventListener('click', async () => {
@@ -165,6 +229,150 @@
       });
 
       loadFlights();
+
+      // --- Flight Summary (Phase 14) ---
+      function formatStat(value, unit, decimals = 1) {
+        return value == null ? '—' : `${value.toFixed(decimals)}${unit}`;
+      }
+
+      // Shared axis chart (gridlines, tick numbers, axis titles) - a
+      // smaller analog of control.html's own drawChartAxes(), duplicated
+      // here since page-specific scripts aren't shared via theme.css.
+      function drawChartAxes(ctx, { W, H, padding, maxX, maxY, xLabel, yLabel }) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padding, H - padding);
+        ctx.lineTo(W - padding, H - padding);
+        ctx.moveTo(padding, padding);
+        ctx.lineTo(padding, H - padding);
+        ctx.stroke();
+
+        ctx.font = '11px sans-serif';
+        for (let f = 0; f <= 1.0001; f += 0.25) {
+          const x = padding + f * (W - padding * 2);
+          ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+          ctx.beginPath();
+          ctx.moveTo(x, padding);
+          ctx.lineTo(x, H - padding);
+          ctx.stroke();
+          ctx.fillStyle = '#93a0b8';
+          ctx.textAlign = 'center';
+          ctx.fillText(`${(f * maxX).toFixed(1)}s`, x, H - padding + 16);
+
+          const y = H - padding - f * (H - padding * 2);
+          ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+          ctx.beginPath();
+          ctx.moveTo(padding, y);
+          ctx.lineTo(W - padding, y);
+          ctx.stroke();
+          ctx.fillStyle = '#93a0b8';
+          ctx.textAlign = 'right';
+          ctx.fillText(`${(f * maxY).toFixed(0)}m`, padding - 8, y + 4);
+        }
+
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#c3cbd9';
+        ctx.font = '12px sans-serif';
+        ctx.fillText(xLabel, padding + (W - padding * 2) / 2, H - 8);
+
+        ctx.save();
+        ctx.translate(14, padding + (H - padding * 2) / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.fillText(yLabel, 0, 0);
+        ctx.restore();
+
+        ctx.textAlign = 'left';
+      }
+
+      function drawHeightChart(trajectory) {
+        const canvas = document.getElementById('summary-chart-canvas');
+        const ctx = canvas.getContext('2d');
+        const W = canvas.width, H = canvas.height;
+        ctx.clearRect(0, 0, W, H);
+        if (!trajectory || trajectory.length === 0) return;
+
+        const t0 = trajectory[0].timestamp_ms;
+        const points = trajectory.map((p) => ({ t: (p.timestamp_ms - t0) / 1000, z: p.filtered_z_m }));
+        const maxT = Math.max(...points.map((p) => p.t)) || 1;
+        const maxZ = Math.max(...points.map((p) => p.z)) || 1;
+        const padding = 40;
+        const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
+        const yAt = (z) => H - padding - (z / maxZ) * (H - padding * 2);
+
+        drawChartAxes(ctx, { W, H, padding, maxX: maxT, maxY: maxZ, xLabel: 'Time (s)', yLabel: 'Height (m)' });
+
+        ctx.strokeStyle = '#2dd4ee';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        points.forEach((p, i) => {
+          const x = xAt(p.t), y = yAt(p.z);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      }
+
+      async function openFlightSummary(flightId, flightNumber) {
+        const res = await fetch(`/api/optical/flights/${flightId}/summary/`);
+        const summary = await res.json();
+        document.getElementById('summary-title').textContent = `Flight #${flightNumber} Summary`;
+
+        const stats = summary.stats || {};
+        const landing = stats.landing_estimate || {};
+        document.getElementById('summary-stat-grid').innerHTML = `
+          <div><span class="stat-label">Apogee Height</span><span class="stat-value">${formatStat(stats.apogee_height_m, ' m')}</span></div>
+          <div><span class="stat-label">Time to Apogee</span><span class="stat-value">${formatStat(stats.time_to_apogee_s, ' s')}</span></div>
+          <div><span class="stat-label">Flight Duration</span><span class="stat-value">${formatStat(stats.flight_duration_s, ' s')}</span></div>
+          <div><span class="stat-label">Max Ascent Rate</span><span class="stat-value">${formatStat(stats.ascent_rate_max_m_s, ' m/s')}</span></div>
+          <div><span class="stat-label">Max Descent Rate</span><span class="stat-value">${formatStat(stats.descent_rate_max_m_s, ' m/s')}</span></div>
+          <div><span class="stat-label">Max Speed</span><span class="stat-value">${formatStat(stats.max_speed_m_s, ' m/s')}</span></div>
+          <div><span class="stat-label">Drift at Apogee</span><span class="stat-value">${formatStat(stats.drift_at_apogee_m, ' m')}</span></div>
+          <div><span class="stat-label">Landing Distance</span><span class="stat-value">${formatStat(landing.distance_m, ' m')}</span></div>
+        `;
+
+        drawHeightChart(summary.trajectory || []);
+
+        const events = summary.events || [];
+        document.getElementById('summary-events-list').innerHTML = events.length === 0
+          ? '<li>No flight events detected.</li>'
+          : events.map((e) => `<li><strong>${escapeHtml(e.event_type)}</strong> @ ${(e.timestamp_ms / 1000).toFixed(2)}s - ${escapeHtml(e.detection_method || '')}</li>`).join('');
+
+        const quality = summary.quality;
+        document.getElementById('summary-quality-line').textContent = quality
+          ? `3+ station coverage: ${quality.pct_three_station != null ? quality.pct_three_station.toFixed(0) : '—'}% · ` +
+            `Outliers rejected: ${quality.num_outliers_rejected} · ` +
+            `Mean residual: ${quality.mean_residual_m != null ? quality.mean_residual_m.toFixed(2) : '—'} m`
+          : 'No quality metrics yet.';
+
+        const limitationsEl = document.getElementById('summary-limitations');
+        const limitations = stats.limitations || [];
+        if (limitations.length > 0) {
+          limitationsEl.style.display = 'block';
+          limitationsEl.innerHTML = limitations.map((l) => `<p style="margin:0.25rem 0;">⚠️ ${escapeHtml(l)}</p>`).join('');
+        } else {
+          limitationsEl.style.display = 'none';
+        }
+
+        document.getElementById('summary-modal').style.display = 'flex';
+      }
+
+      document.getElementById('summary-close-btn').addEventListener('click', () => {
+        document.getElementById('summary-modal').style.display = 'none';
+      });
+
+      document.getElementById('export-btn').addEventListener('click', async () => {
+        const res = await fetch(`/api/optical/sessions/${sessionId}/export/`);
+        const data = await res.json();
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `optical-session-${sessionId}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      });
     }
   </script>
 </body>

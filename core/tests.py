@@ -35,6 +35,8 @@ from .optical_debrief import compute_derived_flight_data
 from .optical_events import detect_flight_events
 from .optical_quality import compute_quality_metrics_for_flight
 from .optical_rays import _interp_bearing_series, generate_rays_for_flight
+from .optical_serializers import export_tracking_session
+from .optical_summary import build_flight_summary
 from .optical_trajectory import _moving_average, assemble_trajectory_for_flight
 from .optical_triangulation import _residual, _solve_point, triangulate_flight
 
@@ -1623,3 +1625,118 @@ class ObservationUploadAutoComputesQualityMetricsTests(TestCase):
 
         upload(station_b, position_b)
         self.assertEqual(TrackingQualityMetrics.objects.filter(flight=flight).count(), 1)
+
+
+class BuildFlightSummaryTests(TestCase):
+    def setUp(self):
+        self.session = TrackingSession.objects.create(name="Flight Summary Test")
+        self.flight = TrackingFlight.objects.create(session=self.session)
+
+    def test_hand_built_flight_summary_includes_everything(self):
+        _make_trajectory_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_trajectory_point(self.flight, 1000, 2.0, 1.0, 20.0)
+        _make_trajectory_point(self.flight, 2000, 4.0, 2.0, 10.0)
+
+        FlightEvent.objects.create(
+            session=self.session,
+            flight=self.flight,
+            event_type=FlightEvent.EVENT_APOGEE,
+            timestamp_ms=1000,
+            detection_method="maximum filtered height",
+        )
+        TrackingQualityMetrics.objects.create(
+            flight=self.flight,
+            pct_three_station=100.0,
+            pct_two_station=0.0,
+            mean_residual_m=0.1,
+            max_residual_m=0.2,
+            num_outliers_rejected=0,
+        )
+
+        summary = build_flight_summary(self.flight)
+
+        self.assertEqual(summary["flight_number"], self.flight.number)
+        self.assertIsNotNone(summary["stats"]["apogee_height_m"])
+        self.assertEqual(len(summary["events"]), 1)
+        self.assertEqual(summary["events"][0]["event_type"], "apogee")
+        self.assertIsNotNone(summary["quality"])
+        self.assertAlmostEqual(summary["quality"]["pct_three_station"], 100.0)
+        self.assertEqual(len(summary["trajectory"]), 3)
+
+    def test_flight_with_no_data_degrades_gracefully(self):
+        summary = build_flight_summary(self.flight)
+        self.assertIsNone(summary["stats"]["apogee_height_m"])
+        self.assertTrue(summary["stats"]["limitations"])
+        self.assertEqual(summary["events"], [])
+        self.assertIsNone(summary["quality"])
+        self.assertEqual(summary["trajectory"], [])
+
+
+class ExportTrackingSessionTests(TestCase):
+    def test_two_flights_derived_data_stays_correctly_separated(self):
+        session = TrackingSession.objects.create(name="Export Test")
+        flight_a = TrackingFlight.objects.create(session=session)
+        flight_b = TrackingFlight.objects.create(session=session)
+
+        _make_triangulated_point(flight_a, 0, 1.0, 1.0, 10.0, stations_used=[1, 2])
+        _make_triangulated_point(flight_b, 0, 2.0, 2.0, 20.0, stations_used=[1, 2])
+        FlightEvent.objects.create(
+            session=session, flight=flight_a, event_type=FlightEvent.EVENT_APOGEE, timestamp_ms=0
+        )
+
+        export = export_tracking_session(session)
+
+        self.assertEqual(export["schema_version"], "1.0")
+        self.assertEqual(len(export["flights"]), 2)
+
+        entry_a = next(f for f in export["flights"] if f["flight_number"] == flight_a.number)
+        entry_b = next(f for f in export["flights"] if f["flight_number"] == flight_b.number)
+
+        self.assertEqual(len(entry_a["triangulated_points"]), 1)
+        self.assertEqual(entry_a["triangulated_points"][0]["z_m"], 10.0)
+        self.assertEqual(len(entry_a["flight_events"]), 1)
+
+        self.assertEqual(len(entry_b["triangulated_points"]), 1)
+        self.assertEqual(entry_b["triangulated_points"][0]["z_m"], 20.0)
+        self.assertEqual(len(entry_b["flight_events"]), 0)
+
+
+class TrackingFlightSummaryApiTests(TestCase):
+    def test_summary_endpoint_returns_expected_keys(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulate_flight(flight)
+        assemble_trajectory_for_flight(flight)
+        detect_flight_events(flight)
+        compute_quality_metrics_for_flight(flight)
+
+        res = self.client.get(f"/api/optical/flights/{flight.id}/summary/")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        for key in ("flight_number", "stats", "events", "quality", "trajectory"):
+            self.assertIn(key, data)
+        self.assertGreater(len(data["trajectory"]), 0)
+        self.assertGreater(len(data["events"]), 0)
+        self.assertIsNotNone(data["quality"])
+
+
+class TrackingSessionExportApiTests(TestCase):
+    def test_export_endpoint_returns_expected_shape(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulate_flight(flight)
+        assemble_trajectory_for_flight(flight)
+        detect_flight_events(flight)
+        compute_quality_metrics_for_flight(flight)
+
+        res = self.client.get(f"/api/optical/sessions/{session.id}/export/")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["schema_version"], "1.0")
+        self.assertIn("session", data)
+        self.assertIn("flights", data)
+        self.assertEqual(len(data["flights"]), 1)
+        flight_entry = data["flights"][0]
+        for key in ("triangulated_points", "trajectory_points", "flight_events", "quality_metrics", "derived_stats"):
+            self.assertIn(key, flight_entry)
+        self.assertGreater(len(flight_entry["trajectory_points"]), 0)

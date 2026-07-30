@@ -24,7 +24,9 @@ from .optical_serializers import (
     TrackingSessionSerializer,
     TrackingStationCreateResponseSerializer,
     TrackingStationSerializer,
+    export_tracking_session,
 )
+from .optical_summary import build_flight_summary
 from .optical_trajectory import assemble_trajectory_for_flight
 from .optical_triangulation import triangulate_flight
 
@@ -336,3 +338,21 @@ class TrackingFlightDebriefView(APIView):
     def get(self, request, flight_id):
         flight = get_object_or_404(TrackingFlight, pk=flight_id)
         return Response(compute_derived_flight_data(flight))
+
+
+class TrackingFlightSummaryView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, flight_id):
+        flight = get_object_or_404(TrackingFlight, pk=flight_id)
+        return Response(build_flight_summary(flight))
+
+
+class TrackingSessionExportView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, session_id):
+        session = get_object_or_404(TrackingSession, pk=session_id)
+        return Response(export_tracking_session(session))

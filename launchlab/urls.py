@@ -31,8 +31,10 @@ from core.api import (
 from core.optical_api import (
     TrackingFlightDebriefView,
     TrackingFlightListCreateView,
+    TrackingFlightSummaryView,
     TrackingObservationUploadView,
     TrackingSessionCreateView,
+    TrackingSessionExportView,
     TrackingStationCalibrationRefineView,
     TrackingStationCalibrationView,
     TrackingStationClockSyncView,
@@ -146,5 +148,15 @@ urlpatterns = [
         'api/optical/flights/<int:flight_id>/debrief/',
         TrackingFlightDebriefView.as_view(),
         name='api-optical-flight-debrief',
+    ),
+    path(
+        'api/optical/flights/<int:flight_id>/summary/',
+        TrackingFlightSummaryView.as_view(),
+        name='api-optical-flight-summary',
+    ),
+    path(
+        'api/optical/sessions/<int:session_id>/export/',
+        TrackingSessionExportView.as_view(),
+        name='api-optical-session-export',
     ),
 ]
