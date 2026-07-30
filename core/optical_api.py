@@ -17,6 +17,7 @@ from .optical_models import (
     TrackingSession,
     TrackingStation,
 )
+from .optical_quality import compute_quality_metrics_for_flight
 from .optical_serializers import (
     StationCalibrationSerializer,
     TrackingFlightSerializer,
@@ -267,6 +268,7 @@ class TrackingObservationUploadView(APIView):
         triangulate_flight(flight)
         assemble_trajectory_for_flight(flight)
         detect_flight_events(flight)
+        compute_quality_metrics_for_flight(flight)
 
         return Response(
             {"frames": frame_count, "pixels": pixel_count}, status=status.HTTP_201_CREATED

@@ -244,9 +244,18 @@ def export_tracking_session(session: TrackingSession) -> dict:
             session.trajectory_points.all(), many=True
         ).data,
         "flight_events": FlightEventSerializer(session.flight_events.all(), many=True).data,
-        "quality_metrics": (
-            TrackingQualityMetricsSerializer(session.quality_metrics).data
-            if hasattr(session, "quality_metrics")
-            else None
-        ),
+        # Quality metrics are per-flight (a session can have several - see
+        # TrackingFlight, Phase 4), not per-session, so this is a list
+        # rather than a single lookup.
+        "quality_metrics": [
+            {
+                "flight_number": flight.number,
+                "metrics": (
+                    TrackingQualityMetricsSerializer(flight.quality_metrics).data
+                    if hasattr(flight, "quality_metrics")
+                    else None
+                ),
+            }
+            for flight in session.flights.all()
+        ],
     }

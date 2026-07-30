@@ -109,4 +109,4 @@ class FlightEventAdmin(admin.ModelAdmin):
 
 @admin.register(TrackingQualityMetrics)
 class TrackingQualityMetricsAdmin(admin.ModelAdmin):
-    list_display = ("session", "pct_three_station", "mean_residual_m", "num_outliers_rejected")
+    list_display = ("flight", "pct_three_station", "mean_residual_m", "num_outliers_rejected")

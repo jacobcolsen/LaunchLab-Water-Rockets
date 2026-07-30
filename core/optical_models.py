@@ -319,8 +319,8 @@ class FlightEvent(models.Model):
 
 
 class TrackingQualityMetrics(models.Model):
-    session = models.OneToOneField(
-        TrackingSession, related_name="quality_metrics", on_delete=models.CASCADE
+    flight = models.OneToOneField(
+        TrackingFlight, related_name="quality_metrics", on_delete=models.CASCADE
     )
     pct_three_station = models.FloatField(null=True, blank=True)
     pct_two_station = models.FloatField(null=True, blank=True)
@@ -328,8 +328,13 @@ class TrackingQualityMetrics(models.Model):
     mean_residual_m = models.FloatField(null=True, blank=True)
     max_residual_m = models.FloatField(null=True, blank=True)
     num_outliers_rejected = models.PositiveIntegerField(default=0)
-    sync_quality_score = models.FloatField(null=True, blank=True)
+    sync_quality_score = models.FloatField(
+        null=True,
+        blank=True,
+        help_text="Mean clock round-trip time (ms) among contributing stations - lower is "
+        "better. A raw diagnostic, not a calibrated 0-1 quality score.",
+    )
     computed_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Quality metrics: {self.session.name}"
+        return f"Quality metrics: {self.flight}"

@@ -25,6 +25,7 @@ from .optical_models import (
     PixelObservation,
     StationCalibration,
     TrackingFlight,
+    TrackingQualityMetrics,
     TrackingSession,
     TrackingStation,
     TrajectoryPoint,
@@ -32,6 +33,7 @@ from .optical_models import (
 )
 from .optical_debrief import compute_derived_flight_data
 from .optical_events import detect_flight_events
+from .optical_quality import compute_quality_metrics_for_flight
 from .optical_rays import _interp_bearing_series, generate_rays_for_flight
 from .optical_trajectory import _moving_average, assemble_trajectory_for_flight
 from .optical_triangulation import _residual, _solve_point, triangulate_flight
@@ -997,7 +999,17 @@ class ObservationUploadAutoTriggersTriangulationTests(TestCase):
         self.assertGreater(TriangulatedPoint.objects.filter(flight=flight).count(), 0)
 
 
-def _make_triangulated_point(flight, t_ms, x, y, z):
+def _make_triangulated_point(
+    flight,
+    t_ms,
+    x,
+    y,
+    z,
+    stations_used=None,
+    rejected_stations=None,
+    residual_error_m=None,
+):
+    stations_used = stations_used if stations_used is not None else []
     return TriangulatedPoint.objects.create(
         session=flight.session,
         flight=flight,
@@ -1005,9 +1017,10 @@ def _make_triangulated_point(flight, t_ms, x, y, z):
         x_m=x,
         y_m=y,
         z_m=z,
-        stations_used=[],
-        stations_used_count=0,
-        rejected_stations=[],
+        stations_used=stations_used,
+        stations_used_count=len(stations_used),
+        rejected_stations=rejected_stations if rejected_stations is not None else [],
+        residual_error_m=residual_error_m,
     )
 
 
@@ -1393,3 +1406,147 @@ class ObservationUploadAutoDetectsFlightEventsTests(TestCase):
         events = FlightEvent.objects.filter(flight=flight)
         self.assertGreater(events.count(), 0)
         self.assertTrue(events.filter(event_type=FlightEvent.EVENT_FIRST_MOTION).exists())
+
+
+class ComputeQualityMetricsForFlightTests(TestCase):
+    def setUp(self):
+        self.session = TrackingSession.objects.create(name="Quality Metrics Test")
+        self.flight = TrackingFlight.objects.create(session=self.session)
+        self._next_index = 1
+
+    def _make_station(self, label, round_trip_ms):
+        station = TrackingStation.objects.create(
+            session=self.session,
+            label=label,
+            station_index=self._next_index,
+            position_source=TrackingStation.SOURCE_MOCK,
+        )
+        self._next_index += 1
+        station.clock_round_trip_ms = round_trip_ms
+        station.save(update_fields=["clock_round_trip_ms"])
+        return station
+
+    def test_hand_built_metrics_match_exact_expected_values(self):
+        station_a = self._make_station("A", 10.0)
+        station_b = self._make_station("B", 20.0)
+        station_c = self._make_station("C", 30.0)
+
+        ids3 = [station_a.id, station_b.id, station_c.id]
+        ids2 = [station_a.id, station_b.id]
+
+        _make_triangulated_point(self.flight, 0, 0.0, 0.0, 0.0, stations_used=ids3, residual_error_m=0.1)
+        _make_triangulated_point(self.flight, 50, 0.0, 0.0, 0.0, stations_used=ids3, residual_error_m=0.2)
+        _make_triangulated_point(
+            self.flight, 100, 0.0, 0.0, 0.0,
+            stations_used=ids2, rejected_stations=[station_c.id], residual_error_m=1.5,
+        )
+        _make_triangulated_point(self.flight, 150, 0.0, 0.0, 0.0, stations_used=ids3, residual_error_m=0.05)
+        _make_triangulated_point(
+            self.flight, 200, 0.0, 0.0, 0.0,
+            stations_used=ids2, rejected_stations=[station_c.id], residual_error_m=2.0,
+        )
+
+        _make_trajectory_point(self.flight, 0, 0.0, 0.0, 0.0, is_gap_filled=False)
+        _make_trajectory_point(self.flight, 50, 0.0, 0.0, 0.0, is_gap_filled=True)
+        _make_trajectory_point(self.flight, 100, 0.0, 0.0, 0.0, is_gap_filled=False)
+        _make_trajectory_point(self.flight, 150, 0.0, 0.0, 0.0, is_gap_filled=False)
+
+        metrics = compute_quality_metrics_for_flight(self.flight)
+
+        self.assertAlmostEqual(metrics.pct_three_station, 60.0)
+        self.assertAlmostEqual(metrics.pct_two_station, 40.0)
+        self.assertAlmostEqual(metrics.pct_interpolated, 25.0)
+        self.assertAlmostEqual(metrics.mean_residual_m, (0.1 + 0.2 + 1.5 + 0.05 + 2.0) / 5)
+        self.assertAlmostEqual(metrics.max_residual_m, 2.0)
+        self.assertEqual(metrics.num_outliers_rejected, 2)
+        self.assertAlmostEqual(metrics.sync_quality_score, 20.0)
+
+    def test_sync_quality_score_only_counts_contributing_stations(self):
+        station_a = self._make_station("A", 10.0)
+        station_b = self._make_station("B", 20.0)
+        self._make_station("Never Used", 999.0)
+
+        _make_triangulated_point(
+            self.flight, 0, 0.0, 0.0, 0.0, stations_used=[station_a.id, station_b.id]
+        )
+        metrics = compute_quality_metrics_for_flight(self.flight)
+        self.assertAlmostEqual(metrics.sync_quality_score, 15.0)
+
+    def test_no_triangulated_points_returns_none_and_clears_stale_row(self):
+        station_a = self._make_station("A", 10.0)
+        _make_triangulated_point(self.flight, 0, 0.0, 0.0, 0.0, stations_used=[station_a.id])
+        compute_quality_metrics_for_flight(self.flight)
+        self.assertEqual(TrackingQualityMetrics.objects.filter(flight=self.flight).count(), 1)
+
+        TriangulatedPoint.objects.filter(flight=self.flight).delete()
+        result = compute_quality_metrics_for_flight(self.flight)
+        self.assertIsNone(result)
+        self.assertEqual(TrackingQualityMetrics.objects.filter(flight=self.flight).count(), 0)
+
+    def test_rerunning_updates_the_same_row(self):
+        station_a = self._make_station("A", 10.0)
+        _make_triangulated_point(self.flight, 0, 0.0, 0.0, 0.0, stations_used=[station_a.id])
+
+        first = compute_quality_metrics_for_flight(self.flight)
+        second = compute_quality_metrics_for_flight(self.flight)
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(TrackingQualityMetrics.objects.filter(flight=self.flight).count(), 1)
+
+
+class ComputeQualityMetricsForMockFlightTests(TestCase):
+    def test_sensible_values_against_the_mock_flight(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulate_flight(flight)
+        assemble_trajectory_for_flight(flight)
+
+        metrics = compute_quality_metrics_for_flight(flight)
+        self.assertIsNotNone(metrics)
+        self.assertGreaterEqual(metrics.pct_three_station, 0.0)
+        self.assertLessEqual(metrics.pct_three_station, 100.0)
+        self.assertGreaterEqual(metrics.pct_two_station, 0.0)
+        self.assertIsNotNone(metrics.mean_residual_m)
+        self.assertGreaterEqual(metrics.num_outliers_rejected, 0)
+
+
+class ObservationUploadAutoComputesQualityMetricsTests(TestCase):
+    def test_upload_populates_quality_metrics_once_two_stations_have_data(self):
+        session = TrackingSession.objects.create(name="Auto Quality Metrics Test")
+        flight = TrackingFlight.objects.create(session=session)
+
+        position_a = (30.0, 0.0, 0.0)
+        position_b = (-30.0, 0.0, 0.0)
+        point = (0.0, 0.0, 20.0)
+
+        station_a = _make_station_aimed_at(session, "A", 1, position_a, point)
+        station_b = _make_station_aimed_at(session, "B", 2, position_b, point)
+        for station in (station_a, station_b):
+            station.clock_offset_ms = 0.0
+            station.clock_round_trip_ms = 15.0
+            station.save(update_fields=["clock_offset_ms", "clock_round_trip_ms"])
+
+        def upload(station, position):
+            calibration = station.calibrations.get(is_active=True)
+            pixel_x, pixel_y = project_to_pixel(point, position, calibration)
+            return self.client.post(
+                "/api/optical/stations/observations/",
+                data=json.dumps(
+                    {
+                        "device_token": station.device_token,
+                        "flight_number": flight.number,
+                        "image_width_px": 1920,
+                        "image_height_px": 1080,
+                        "observations": [
+                            {"frame_index": 0, "local_timestamp_ms": 0, "pixel_x": pixel_x, "pixel_y": pixel_y},
+                            {"frame_index": 1, "local_timestamp_ms": 1000, "pixel_x": pixel_x, "pixel_y": pixel_y},
+                        ],
+                    }
+                ),
+                content_type="application/json",
+            )
+
+        upload(station_a, position_a)
+        self.assertEqual(TrackingQualityMetrics.objects.filter(flight=flight).count(), 0)
+
+        upload(station_b, position_b)
+        self.assertEqual(TrackingQualityMetrics.objects.filter(flight=flight).count(), 1)
