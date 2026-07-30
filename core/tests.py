@@ -505,6 +505,70 @@ class OpticalFlightAndObservationApiTests(TestCase):
             self.assertAlmostEqual(a, b, places=4)
 
 
+class ObservationSourceUploadTests(TestCase):
+    """Phase 12: assisted-tracking observations carry their own source."""
+
+    def setUp(self):
+        session_res = self.client.post(
+            "/api/optical/sessions/",
+            data=json.dumps({"name": "Observation Source Test Session"}),
+            content_type="application/json",
+        )
+        session_id = session_res.json()["id"]
+        station_res = self.client.post(
+            f"/api/optical/sessions/{session_id}/stations/",
+            data=json.dumps({"label": "Station A", "position_source": "mock"}),
+            content_type="application/json",
+        )
+        self.token = station_res.json()["device_token"]
+        flight_res = self.client.post(
+            f"/api/optical/sessions/{session_id}/flights/",
+            data=json.dumps({}),
+            content_type="application/json",
+        )
+        self.flight_number = flight_res.json()["number"]
+
+    def _upload_one(self, frame_index, **entry_overrides):
+        entry = {
+            "frame_index": frame_index,
+            "local_timestamp_ms": frame_index * 33,
+            "pixel_x": 100.0,
+            "pixel_y": 200.0,
+        }
+        entry.update(entry_overrides)
+        return self.client.post(
+            "/api/optical/stations/observations/",
+            data=json.dumps(
+                {
+                    "device_token": self.token,
+                    "flight_number": self.flight_number,
+                    "image_width_px": 1920,
+                    "image_height_px": 1080,
+                    "observations": [entry],
+                }
+            ),
+            content_type="application/json",
+        )
+
+    def test_assisted_source_is_persisted(self):
+        res = self._upload_one(0, observation_source="assisted")
+        self.assertEqual(res.status_code, 201, res.content)
+        obs = PixelObservation.objects.get(frame__frame_index=0)
+        self.assertEqual(obs.observation_source, "assisted")
+
+    def test_missing_source_defaults_to_manual(self):
+        res = self._upload_one(0)
+        self.assertEqual(res.status_code, 201, res.content)
+        obs = PixelObservation.objects.get(frame__frame_index=0)
+        self.assertEqual(obs.observation_source, "manual")
+
+    def test_invalid_source_falls_back_to_manual(self):
+        res = self._upload_one(0, observation_source="not_a_real_source")
+        self.assertEqual(res.status_code, 201, res.content)
+        obs = PixelObservation.objects.get(frame__frame_index=0)
+        self.assertEqual(obs.observation_source, "manual")
+
+
 class OpticalClockSyncApiTests(TestCase):
     """Phase 5: server-time echo + per-station clock offset sync."""
 

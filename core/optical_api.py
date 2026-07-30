@@ -255,12 +255,17 @@ class TrackingObservationUploadView(APIView):
             pixel_x = entry.get("pixel_x")
             pixel_y = entry.get("pixel_y")
             if pixel_x is not None and pixel_y is not None:
+                valid_sources = dict(PixelObservation.OBSERVATION_SOURCE_CHOICES)
+                observation_source = entry.get("observation_source")
+                if observation_source not in valid_sources:
+                    observation_source = PixelObservation.SOURCE_MANUAL
+
                 PixelObservation.objects.filter(frame=frame, is_current=True).update(is_current=False)
                 PixelObservation.objects.create(
                     frame=frame,
                     pixel_x=pixel_x,
                     pixel_y=pixel_y,
-                    observation_source=PixelObservation.SOURCE_MANUAL,
+                    observation_source=observation_source,
                     valid=True,
                 )
                 pixel_count += 1

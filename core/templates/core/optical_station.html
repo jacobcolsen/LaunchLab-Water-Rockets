@@ -68,6 +68,11 @@
       position: absolute; width: 20px; height: 20px; border: 2px solid var(--accent-green);
       border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
     }
+    #suggestion-marker {
+      position: absolute; width: 28px; height: 28px; border: 2px dashed var(--accent-orange);
+      border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
+    }
+    #suggestion-row { margin-top: 0.5rem; }
   </style>
 </head>
 <body>
@@ -191,7 +196,9 @@
       <div id="review-controls" style="display:none;">
         <div id="playback-wrap">
           <video id="playback-feed" playsinline muted></video>
+          <div id="suggestion-marker" style="display:none;"></div>
         </div>
+        <canvas id="tracking-canvas" style="display:none;"></canvas>
 
         <div class="step-row">
           <button type="button" id="step-back-btn" class="btn btn-secondary">⏮ Step Back</button>
@@ -201,6 +208,10 @@
         <input type="number" id="frame-step" value="0.033" step="any">
 
         <p class="hint" style="margin-top:0.75rem;">Tap the video where the rocket is, or skip if it's not visible.</p>
+        <div id="suggestion-row" style="display:none;">
+          <p class="hint" style="margin-top:0.5rem;">🔎 Suggested position ready - tap the video to correct it, or accept it below.</p>
+          <button type="button" id="accept-suggestion-btn" class="btn btn-secondary">✓ Accept Suggested Position</button>
+        </div>
         <button type="button" id="skip-frame-btn" class="btn btn-secondary">⏭️ Skip (not visible)</button>
         <div id="tag-counts">0 frames reviewed, 0 tagged</div>
 
@@ -533,9 +544,107 @@
     // --- Record & Tag Flight (Phase 4: manual observations) ---
     let mediaRecorder = null;
     let recordedChunks = [];
-    let taggedObservations = []; // {frame_index, local_timestamp_ms, pixel_x, pixel_y}
+    let taggedObservations = []; // {frame_index, local_timestamp_ms, pixel_x, pixel_y, observation_source}
     let nextFrameIndex = 0;
     let currentFlightNumber = null;
+
+    // --- Assisted tracking (Phase 12): simple block-matching, no ML ---
+    // "Anchor" is the last confirmed tap's small pixel patch. On arriving
+    // at a new frame, search a small neighborhood around the anchor's
+    // last position for the closest-matching patch (lowest grayscale
+    // sum-of-absolute-differences) and offer it as a suggestion.
+    const PATCH_RADIUS = 12;
+    const SEARCH_RADIUS = 40;
+    const SEARCH_STEP = 2;
+
+    let anchorPatch = null;
+    let anchorX = null;
+    let anchorY = null;
+    let suggestion = null;
+
+    function grabFramePixels() {
+      const video = document.getElementById('playback-feed');
+      const canvas = document.getElementById('tracking-canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
+      return ctx.getImageData(0, 0, video.videoWidth, video.videoHeight);
+    }
+
+    function extractPatch(imageData, cx, cy) {
+      const { width, height, data } = imageData;
+      const patch = [];
+      for (let dy = -PATCH_RADIUS; dy < PATCH_RADIUS; dy++) {
+        const y = Math.min(height - 1, Math.max(0, Math.round(cy + dy)));
+        for (let dx = -PATCH_RADIUS; dx < PATCH_RADIUS; dx++) {
+          const x = Math.min(width - 1, Math.max(0, Math.round(cx + dx)));
+          const idx = (y * width + x) * 4;
+          patch.push(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+        }
+      }
+      return patch;
+    }
+
+    function findBestMatch(imageData) {
+      let best = { sad: Infinity, x: anchorX, y: anchorY };
+      for (let oy = -SEARCH_RADIUS; oy <= SEARCH_RADIUS; oy += SEARCH_STEP) {
+        for (let ox = -SEARCH_RADIUS; ox <= SEARCH_RADIUS; ox += SEARCH_STEP) {
+          const candidateX = anchorX + ox;
+          const candidateY = anchorY + oy;
+          const candidatePatch = extractPatch(imageData, candidateX, candidateY);
+          let sad = 0;
+          for (let i = 0; i < anchorPatch.length; i++) {
+            sad += Math.abs(anchorPatch[i] - candidatePatch[i]);
+          }
+          if (sad < best.sad) {
+            best = { sad, x: candidateX, y: candidateY };
+          }
+        }
+      }
+      return best;
+    }
+
+    function captureAnchor(pixelX, pixelY) {
+      anchorPatch = extractPatch(grabFramePixels(), pixelX, pixelY);
+      anchorX = pixelX;
+      anchorY = pixelY;
+    }
+
+    function hideSuggestion() {
+      suggestion = null;
+      document.getElementById('suggestion-marker').style.display = 'none';
+      document.getElementById('suggestion-row').style.display = 'none';
+    }
+
+    function showSuggestionMarker(x, y) {
+      const video = document.getElementById('playback-feed');
+      const rect = video.getBoundingClientRect();
+      const marker = document.getElementById('suggestion-marker');
+      marker.style.left = `${x * (rect.width / video.videoWidth)}px`;
+      marker.style.top = `${y * (rect.height / video.videoHeight)}px`;
+      marker.style.display = 'block';
+      document.getElementById('suggestion-row').style.display = 'block';
+    }
+
+    function runSuggestion() {
+      if (!anchorPatch) {
+        hideSuggestion();
+        return;
+      }
+      const best = findBestMatch(grabFramePixels());
+      suggestion = { x: best.x, y: best.y };
+      showSuggestionMarker(best.x, best.y);
+    }
+
+    document.getElementById('playback-feed').addEventListener('seeked', runSuggestion);
+
+    document.getElementById('accept-suggestion-btn').addEventListener('click', () => {
+      if (!suggestion) return;
+      recordObservation(suggestion.x, suggestion.y, 'assisted');
+      captureAnchor(suggestion.x, suggestion.y);
+      hideSuggestion();
+    });
 
     async function refreshCurrentFlight() {
       const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
@@ -605,6 +714,8 @@
         const blob = new Blob(recordedChunks, { type: recordedChunks[0]?.type || 'video/webm' });
         const playback = document.getElementById('playback-feed');
         playback.src = URL.createObjectURL(blob);
+        anchorPatch = null;
+        hideSuggestion();
         document.getElementById('record-controls').style.display = 'none';
         document.getElementById('review-controls').style.display = 'block';
       };
@@ -640,13 +751,14 @@
         `${taggedObservations.length} frames reviewed, ${tagged} tagged`;
     }
 
-    function recordObservation(pixelX, pixelY) {
+    function recordObservation(pixelX, pixelY, observationSource) {
       const video = document.getElementById('playback-feed');
       taggedObservations.push({
         frame_index: nextFrameIndex++,
         local_timestamp_ms: Math.round(video.currentTime * 1000),
         pixel_x: pixelX,
         pixel_y: pixelY,
+        observation_source: observationSource || 'manual',
       });
       updateTagCounts();
     }
@@ -656,7 +768,12 @@
       const rect = video.getBoundingClientRect();
       const scaleX = video.videoWidth / rect.width;
       const scaleY = video.videoHeight / rect.height;
-      recordObservation((e.clientX - rect.left) * scaleX, (e.clientY - rect.top) * scaleY);
+      const pixelX = (e.clientX - rect.left) * scaleX;
+      const pixelY = (e.clientY - rect.top) * scaleY;
+
+      recordObservation(pixelX, pixelY, 'manual');
+      captureAnchor(pixelX, pixelY);
+      hideSuggestion();
 
       const marker = document.createElement('div');
       marker.className = 'obs-marker';
@@ -668,6 +785,8 @@
 
     document.getElementById('skip-frame-btn').addEventListener('click', () => {
       recordObservation(null, null);
+      anchorPatch = null;
+      hideSuggestion();
       const video = document.getElementById('playback-feed');
       video.currentTime = Math.min(video.duration || Infinity, video.currentTime + frameStepSeconds());
     });
