@@ -68,7 +68,10 @@ class TrackingStationSerializer(serializers.ModelSerializer):
             "measured_height_m",
             "created_at",
             "calibrations",
+            "clock_offset_ms",
+            "clock_synced_at",
         ]
+        read_only_fields = ["clock_offset_ms", "clock_synced_at"]
 
 
 POSITION_REQUIRED_FIELDS = {

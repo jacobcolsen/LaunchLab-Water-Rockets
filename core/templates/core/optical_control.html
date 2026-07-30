@@ -87,10 +87,10 @@
       </div>
       <table>
         <thead>
-          <tr><th>Station</th><th>Position Source</th><th>Coordinates</th></tr>
+          <tr><th>Station</th><th>Position Source</th><th>Coordinates</th><th>Calibration</th><th>Clock</th></tr>
         </thead>
         <tbody id="roster-body">
-          <tr><td colspan="3">Loading…</td></tr>
+          <tr><td colspan="5">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -117,6 +117,28 @@
           <ul id="summary-events-list"></ul>
           <div class="summary-section-title">Quality</div>
           <p id="summary-quality-line" class="hint"></p>
+          <div class="summary-section-title">Validate Against Known Point</div>
+          <p class="hint" style="margin-top:0;">Compare this flight's computed position against one independently-measured reference point (e.g. a taped-measured pad crossbar height).</p>
+          <form id="validate-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:flex-end;">
+            <div>
+              <label class="hint" style="display:block;">Known X (m)</label>
+              <input type="number" step="any" id="validate-x" required style="width:90px;">
+            </div>
+            <div>
+              <label class="hint" style="display:block;">Known Y (m)</label>
+              <input type="number" step="any" id="validate-y" required style="width:90px;">
+            </div>
+            <div>
+              <label class="hint" style="display:block;">Known Z (m)</label>
+              <input type="number" step="any" id="validate-z" required style="width:90px;">
+            </div>
+            <div>
+              <label class="hint" style="display:block;">At timestamp (ms, optional)</label>
+              <input type="number" step="1" id="validate-timestamp" placeholder="defaults to apogee" style="width:150px;">
+            </div>
+            <button type="submit" class="btn btn-secondary">Validate</button>
+          </form>
+          <p id="validate-result" class="hint" style="margin-top:0.5rem;"></p>
           <div id="summary-limitations" class="summary-limitations" style="display:none;"></div>
         </div>
       </div>
@@ -168,19 +190,28 @@
         return '—';
       }
 
+      function readinessBadge(isReady, readyLabel, notReadyLabel) {
+        return isReady
+          ? `<span class="badge badge-green">✓ ${readyLabel}</span>`
+          : `<span class="badge badge-muted">✗ ${notReadyLabel}</span>`;
+      }
+
       function renderRoster(stations) {
         const body = document.getElementById('roster-body');
         if (stations.length === 0) {
-          body.innerHTML = '<tr><td colspan="3">No stations yet.</td></tr>';
+          body.innerHTML = '<tr><td colspan="5">No stations yet.</td></tr>';
           return;
         }
         body.innerHTML = stations.map((s) => {
           const [cls, label] = sourceBadge[s.position_source] || ['badge-muted', s.position_source];
+          const hasCalibration = (s.calibrations || []).some((c) => c.is_active);
           return `
             <tr>
               <td>${escapeHtml(s.label)}</td>
               <td><span class="badge ${cls}">${label}</span></td>
               <td>${formatCoordinates(s)}</td>
+              <td>${readinessBadge(hasCalibration, 'Set', 'Not set')}</td>
+              <td>${readinessBadge(s.clock_synced_at != null, 'Synced', 'Not synced')}</td>
             </tr>
           `;
         }).join('');
@@ -312,10 +343,16 @@
         ctx.stroke();
       }
 
+      let currentValidateFlightId = null;
+
       async function openFlightSummary(flightId, flightNumber) {
         const res = await fetch(`/api/optical/flights/${flightId}/summary/`);
         const summary = await res.json();
         document.getElementById('summary-title').textContent = `Flight #${flightNumber} Summary`;
+
+        currentValidateFlightId = flightId;
+        document.getElementById('validate-form').reset();
+        document.getElementById('validate-result').textContent = '';
 
         const stats = summary.stats || {};
         const landing = stats.landing_estimate || {};
@@ -358,6 +395,35 @@
 
       document.getElementById('summary-close-btn').addEventListener('click', () => {
         document.getElementById('summary-modal').style.display = 'none';
+      });
+
+      document.getElementById('validate-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const resultEl = document.getElementById('validate-result');
+        const timestampRaw = document.getElementById('validate-timestamp').value;
+        const body = {
+          known_x_m: parseFloat(document.getElementById('validate-x').value),
+          known_y_m: parseFloat(document.getElementById('validate-y').value),
+          known_z_m: parseFloat(document.getElementById('validate-z').value),
+        };
+        if (timestampRaw !== '') body.at_timestamp_ms = parseInt(timestampRaw, 10);
+
+        resultEl.textContent = 'Validating…';
+        const res = await fetch(`/api/optical/flights/${currentValidateFlightId}/validate/`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+
+        if (!res.ok || data.detail) {
+          resultEl.textContent = data.detail || 'Validation failed.';
+          return;
+        }
+
+        resultEl.textContent =
+          `At ${(data.compared_timestamp_ms / 1000).toFixed(2)}s: horizontal error ${data.horizontal_error_m.toFixed(2)} m, ` +
+          `vertical error ${data.vertical_error_m.toFixed(2)} m, total error ${data.total_error_m.toFixed(2)} m.`;
       });
 
       document.getElementById('export-btn').addEventListener('click', async () => {

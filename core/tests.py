@@ -35,7 +35,7 @@ from .optical_debrief import compute_derived_flight_data
 from .optical_events import detect_flight_events
 from .optical_quality import compute_quality_metrics_for_flight
 from .optical_rays import _interp_bearing_series, generate_rays_for_flight
-from .optical_serializers import export_tracking_session
+from .optical_serializers import TrackingStationSerializer, export_tracking_session
 from .optical_summary import build_flight_summary
 from .optical_trajectory import _moving_average, assemble_trajectory_for_flight
 from .optical_triangulation import _residual, _solve_point, triangulate_flight
@@ -270,6 +270,31 @@ class OpticalStationApiTests(TestCase):
         data = res.json()
         self.assertEqual(data["position_source"], "surveyed_enu")
         self.assertEqual(data["surveyed_x_m"], 12.0)
+
+    def test_serializer_exposes_clock_sync_fields_for_roster_readiness(self):
+        """Phase 16: the control page's Station Roster needs to know
+        whether a station's clock has been synced, so these fields
+        (already on the model since Phase 5) must be readable here."""
+        token = self._create_station("Station E").json()["device_token"]
+        self.client.post(
+            "/api/optical/stations/clock-sync/",
+            data=json.dumps({"device_token": token, "offset_ms": 42.0, "round_trip_ms": 10.0}),
+            content_type="application/json",
+        )
+
+        station = TrackingStation.objects.get(device_token=token)
+        data = TrackingStationSerializer(station).data
+        self.assertIn("clock_offset_ms", data)
+        self.assertIn("clock_synced_at", data)
+        self.assertEqual(data["clock_offset_ms"], 42.0)
+        self.assertIsNotNone(data["clock_synced_at"])
+
+    def test_unsynced_station_reports_null_clock_fields(self):
+        token = self._create_station("Station F").json()["device_token"]
+        station = TrackingStation.objects.get(device_token=token)
+        data = TrackingStationSerializer(station).data
+        self.assertIsNone(data["clock_offset_ms"])
+        self.assertIsNone(data["clock_synced_at"])
 
     def test_position_endpoint_requires_device_token(self):
         res = self.client.post(
