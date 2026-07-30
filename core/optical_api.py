@@ -29,6 +29,7 @@ from .optical_serializers import (
 from .optical_summary import build_flight_summary
 from .optical_trajectory import assemble_trajectory_for_flight
 from .optical_triangulation import triangulate_flight
+from .optical_validation import validate_flight_against_known_point
 
 CALIBRATION_FIELDS = (
     "image_width_px",
@@ -356,3 +357,34 @@ class TrackingSessionExportView(APIView):
     def get(self, request, session_id):
         session = get_object_or_404(TrackingSession, pk=session_id)
         return Response(export_tracking_session(session))
+
+
+class TrackingFlightValidationView(APIView):
+    """Lets an operator submit one independently-measured reference point
+    (e.g. a taped-measured pad crossbar height) against a real flight and
+    see the computed error. Read-only in effect - computes and returns,
+    persists nothing."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request, flight_id):
+        flight = get_object_or_404(TrackingFlight, pk=flight_id)
+        known_x_m = request.data.get("known_x_m")
+        known_y_m = request.data.get("known_y_m")
+        known_z_m = request.data.get("known_z_m")
+        if None in (known_x_m, known_y_m, known_z_m):
+            return Response(
+                {"detail": "known_x_m, known_y_m, and known_z_m are all required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        at_timestamp_ms = request.data.get("at_timestamp_ms")
+        result = validate_flight_against_known_point(
+            flight,
+            float(known_x_m),
+            float(known_y_m),
+            float(known_z_m),
+            at_timestamp_ms=at_timestamp_ms,
+        )
+        return Response(result)

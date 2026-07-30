@@ -39,6 +39,11 @@ from .optical_serializers import export_tracking_session
 from .optical_summary import build_flight_summary
 from .optical_trajectory import _moving_average, assemble_trajectory_for_flight
 from .optical_triangulation import _residual, _solve_point, triangulate_flight
+from .optical_validation import (
+    compute_position_error,
+    validate_flight_against_known_point,
+    validate_pipeline_against_mock_flight,
+)
 
 
 def _calibration(facing_deg=0.0, pitch_deg=0.0, roll_deg=0.0, width=1920, height=1080, fov_h=60.0, fov_v=34.0):
@@ -1740,3 +1745,125 @@ class TrackingSessionExportApiTests(TestCase):
         for key in ("triangulated_points", "trajectory_points", "flight_events", "quality_metrics", "derived_stats"):
             self.assertIn(key, flight_entry)
         self.assertGreater(len(flight_entry["trajectory_points"]), 0)
+
+
+class ComputePositionErrorTests(TestCase):
+    def test_pure_horizontal_offset(self):
+        error = compute_position_error((3.0, 4.0, 10.0), (0.0, 0.0, 10.0))
+        self.assertAlmostEqual(error["horizontal_error_m"], 5.0)
+        self.assertAlmostEqual(error["vertical_error_m"], 0.0)
+        self.assertAlmostEqual(error["total_error_m"], 5.0)
+
+    def test_pure_vertical_offset(self):
+        error = compute_position_error((1.0, 1.0, 12.0), (1.0, 1.0, 9.5))
+        self.assertAlmostEqual(error["horizontal_error_m"], 0.0)
+        self.assertAlmostEqual(error["vertical_error_m"], 2.5)
+        self.assertAlmostEqual(error["total_error_m"], 2.5)
+
+    def test_combined_3d_offset(self):
+        # 3-4-12 gives a horizontal leg of 5 and a 3D hypotenuse of 13.
+        error = compute_position_error((3.0, 4.0, 12.0), (0.0, 0.0, 0.0))
+        self.assertAlmostEqual(error["horizontal_error_m"], 5.0)
+        self.assertAlmostEqual(error["vertical_error_m"], 12.0)
+        self.assertAlmostEqual(error["total_error_m"], 13.0)
+
+
+class ValidateFlightAgainstKnownPointTests(TestCase):
+    def setUp(self):
+        self.session = TrackingSession.objects.create(name="Validation Test")
+        self.flight = TrackingFlight.objects.create(session=self.session)
+        _make_trajectory_point(self.flight, 0, 0.0, 0.0, 0.0)
+        _make_trajectory_point(self.flight, 100, 1.0, 0.0, 20.0)  # apogee
+        _make_trajectory_point(self.flight, 200, 2.0, 0.0, 5.0)
+
+    def test_no_trajectory_points_returns_detail(self):
+        empty_flight = TrackingFlight.objects.create(session=self.session)
+        result = validate_flight_against_known_point(empty_flight, 0.0, 0.0, 0.0)
+        self.assertIn("detail", result)
+
+    def test_defaults_to_apogee_point(self):
+        result = validate_flight_against_known_point(self.flight, 1.0, 0.0, 20.0)
+        self.assertEqual(result["compared_timestamp_ms"], 100)
+        self.assertAlmostEqual(result["total_error_m"], 0.0)
+
+    def test_explicit_timestamp_overrides_apogee_default(self):
+        result = validate_flight_against_known_point(
+            self.flight, 2.0, 0.0, 5.0, at_timestamp_ms=200
+        )
+        self.assertEqual(result["compared_timestamp_ms"], 200)
+        self.assertAlmostEqual(result["total_error_m"], 0.0)
+
+    def test_explicit_timestamp_picks_nearest_point(self):
+        result = validate_flight_against_known_point(
+            self.flight, 0.0, 0.0, 0.0, at_timestamp_ms=80
+        )
+        self.assertEqual(result["compared_timestamp_ms"], 100)
+
+    def test_known_offset_reports_correct_error(self):
+        result = validate_flight_against_known_point(self.flight, 0.0, 0.0, 0.0, at_timestamp_ms=0)
+        self.assertEqual(result["compared_timestamp_ms"], 0)
+        self.assertAlmostEqual(result["total_error_m"], 0.0)
+
+
+class ValidatePipelineAgainstMockFlightTests(TestCase):
+    """The project's first numerical-accuracy regression test: runs the
+    real Phase 7-8 pipeline against the mock generator's known ground
+    truth and asserts the error stays within concrete bounds. If a
+    future change to the triangulation/trajectory math quietly degrades
+    accuracy, this is the test that would catch it."""
+
+    def test_pipeline_accuracy_stays_within_expected_bounds(self):
+        result = validate_pipeline_against_mock_flight()
+
+        self.assertIsNotNone(result["mean_error_m"])
+        self.assertIsNotNone(result["max_error_m"])
+        self.assertGreater(len(result["per_point_errors"]), 0)
+
+        # Generous enough to allow for the mock's deliberate pixel noise,
+        # dropped frames, and one deliberately corrupted observation -
+        # tight enough to catch a genuine regression in the math.
+        self.assertLess(result["mean_error_m"], 0.2)
+        self.assertLess(result["max_error_m"], 3.0)
+
+        self.assertIn("simulated", result["caveat"].lower())
+        self.assertIn("real", result["caveat"].lower())
+
+
+class TrackingFlightValidationApiTests(TestCase):
+    def test_validation_endpoint_returns_computed_error(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulate_flight(flight)
+        assemble_trajectory_for_flight(flight)
+
+        apogee_point = max(
+            flight.trajectory_points.all(), key=lambda p: p.filtered_z_m
+        )
+        res = self.client.post(
+            f"/api/optical/flights/{flight.id}/validate/",
+            data=json.dumps(
+                {
+                    "known_x_m": apogee_point.filtered_x_m,
+                    "known_y_m": apogee_point.filtered_y_m,
+                    "known_z_m": apogee_point.filtered_z_m,
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["compared_timestamp_ms"], apogee_point.timestamp_ms)
+        self.assertAlmostEqual(data["total_error_m"], 0.0)
+
+    def test_validation_endpoint_requires_known_position(self):
+        session = generate_mock_tracking_session()
+        flight = session.flights.first()
+        triangulate_flight(flight)
+        assemble_trajectory_for_flight(flight)
+
+        res = self.client.post(
+            f"/api/optical/flights/{flight.id}/validate/",
+            data=json.dumps({"known_x_m": 1.0}),
+            content_type="application/json",
+        )
+        self.assertEqual(res.status_code, 400)

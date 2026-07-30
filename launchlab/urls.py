@@ -37,6 +37,7 @@ from core.optical_api import (
     TrackingSessionExportView,
     TrackingStationCalibrationRefineView,
     TrackingStationCalibrationView,
+    TrackingFlightValidationView,
     TrackingStationClockSyncView,
     TrackingStationListCreateView,
     TrackingStationPositionView,
@@ -158,5 +159,10 @@ urlpatterns = [
         'api/optical/sessions/<int:session_id>/export/',
         TrackingSessionExportView.as_view(),
         name='api-optical-session-export',
+    ),
+    path(
+        'api/optical/flights/<int:flight_id>/validate/',
+        TrackingFlightValidationView.as_view(),
+        name='api-optical-flight-validate',
     ),
 ]
