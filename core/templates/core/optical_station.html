@@ -73,6 +73,23 @@
       border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
     }
     #suggestion-row { margin-top: 0.5rem; }
+
+    #live-track-section { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+    #live-track-section h3 {
+      margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--text-muted);
+      text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    #live-track-wrap {
+      position: relative; width: 100%; border-radius: 12px; overflow: hidden;
+      background: #05070d; cursor: crosshair;
+    }
+    #live-track-feed { width: 100%; display: block; }
+    #live-track-marker {
+      position: absolute; width: 24px; height: 24px; border: 3px solid var(--accent-red);
+      border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
+      box-shadow: 0 0 10px var(--accent-red);
+    }
+    #live-track-status { margin-top: 0.6rem; font-size: 0.9rem; }
   </style>
 </head>
 <body>
@@ -217,6 +234,25 @@
 
         <button type="button" id="upload-observations-btn" class="btn btn-primary">⬆️ Upload Observations</button>
         <div id="upload-status"></div>
+      </div>
+
+      <div id="live-track-section">
+        <h3>🔴 Live Track (Experimental)</h3>
+        <p class="hint">
+          Tracks the rocket automatically in real time instead of recording then
+          reviewing. Whether this keeps up on your phone is unverified - this
+          prototype is how you find out.
+        </p>
+
+        <div id="live-track-wrap">
+          <video id="live-track-feed" autoplay playsinline muted></video>
+          <div id="live-track-marker" style="display:none;"></div>
+        </div>
+
+        <p class="hint" style="margin-top:0.5rem;">Tap the rocket (or the pad, before launch) to start tracking from there.</p>
+        <button type="button" id="live-track-start-btn" class="btn btn-primary" disabled>🔴 Start Live Tracking</button>
+        <button type="button" id="live-track-stop-btn" class="btn btn-danger" style="display:none;">⏹ Stop Live Tracking</button>
+        <div id="live-track-status" class="hint"></div>
       </div>
     </div>
 
@@ -450,6 +486,7 @@
         }
         cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
         document.getElementById('camera-feed').srcObject = cameraStream;
+        document.getElementById('live-track-feed').srcObject = cameraStream;
         startOrientationListener();
         document.getElementById('camera-permission-gate').style.display = 'none';
         document.getElementById('camera-scope').style.display = 'block';
@@ -562,8 +599,7 @@
     let anchorY = null;
     let suggestion = null;
 
-    function grabFramePixels() {
-      const video = document.getElementById('playback-feed');
+    function grabFramePixels(video) {
       const canvas = document.getElementById('tracking-canvas');
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
@@ -586,16 +622,16 @@
       return patch;
     }
 
-    function findBestMatch(imageData) {
-      let best = { sad: Infinity, x: anchorX, y: anchorY };
-      for (let oy = -SEARCH_RADIUS; oy <= SEARCH_RADIUS; oy += SEARCH_STEP) {
-        for (let ox = -SEARCH_RADIUS; ox <= SEARCH_RADIUS; ox += SEARCH_STEP) {
-          const candidateX = anchorX + ox;
-          const candidateY = anchorY + oy;
+    function findBestMatch(imageData, patch, startX, startY, searchRadius = SEARCH_RADIUS, searchStep = SEARCH_STEP) {
+      let best = { sad: Infinity, x: startX, y: startY };
+      for (let oy = -searchRadius; oy <= searchRadius; oy += searchStep) {
+        for (let ox = -searchRadius; ox <= searchRadius; ox += searchStep) {
+          const candidateX = startX + ox;
+          const candidateY = startY + oy;
           const candidatePatch = extractPatch(imageData, candidateX, candidateY);
           let sad = 0;
-          for (let i = 0; i < anchorPatch.length; i++) {
-            sad += Math.abs(anchorPatch[i] - candidatePatch[i]);
+          for (let i = 0; i < patch.length; i++) {
+            sad += Math.abs(patch[i] - candidatePatch[i]);
           }
           if (sad < best.sad) {
             best = { sad, x: candidateX, y: candidateY };
@@ -606,7 +642,7 @@
     }
 
     function captureAnchor(pixelX, pixelY) {
-      anchorPatch = extractPatch(grabFramePixels(), pixelX, pixelY);
+      anchorPatch = extractPatch(grabFramePixels(document.getElementById('playback-feed')), pixelX, pixelY);
       anchorX = pixelX;
       anchorY = pixelY;
     }
@@ -632,7 +668,8 @@
         hideSuggestion();
         return;
       }
-      const best = findBestMatch(grabFramePixels());
+      const imageData = grabFramePixels(document.getElementById('playback-feed'));
+      const best = findBestMatch(imageData, anchorPatch, anchorX, anchorY);
       suggestion = { x: best.x, y: best.y };
       showSuggestionMarker(best.x, best.y);
     }
@@ -644,6 +681,89 @@
       recordObservation(suggestion.x, suggestion.y, 'assisted');
       captureAnchor(suggestion.x, suggestion.y);
       hideSuggestion();
+    });
+
+    // --- Live Tracking (Phase 13): experimental feasibility prototype ---
+    // Reuses Phase 12's block-matching (grabFramePixels/extractPatch/
+    // findBestMatch) against the *live* camera feed instead of a
+    // recorded one, on a timer instead of a step-by-step review. The
+    // search radius is wider than Phase 12's - between live samples the
+    // rocket can travel much further than between individual recorded
+    // frames - but that number, and the achieved sample rate below, are
+    // both educated guesses: this prototype's whole point is to reveal,
+    // on real hardware, whether they're actually adequate.
+    const LIVE_TRACK_INTERVAL_MS = 200; // 5 Hz target
+    const LIVE_TRACK_SEARCH_RADIUS = 100;
+    const LIVE_TRACK_SEARCH_STEP = 4;
+
+    let liveTrackAnchorPatch = null;
+    let liveTrackAnchorX = null;
+    let liveTrackAnchorY = null;
+    let liveTrackIntervalId = null;
+    let liveTrackLastSampleAt = null;
+    let liveTrackCount = 0;
+
+    document.getElementById('live-track-wrap').addEventListener('click', (e) => {
+      const video = document.getElementById('live-track-feed');
+      const rect = video.getBoundingClientRect();
+      const scaleX = video.videoWidth / rect.width;
+      const scaleY = video.videoHeight / rect.height;
+      const pixelX = (e.clientX - rect.left) * scaleX;
+      const pixelY = (e.clientY - rect.top) * scaleY;
+
+      liveTrackAnchorPatch = extractPatch(grabFramePixels(video), pixelX, pixelY);
+      liveTrackAnchorX = pixelX;
+      liveTrackAnchorY = pixelY;
+
+      const marker = document.getElementById('live-track-marker');
+      marker.style.left = `${e.clientX - rect.left}px`;
+      marker.style.top = `${e.clientY - rect.top}px`;
+      marker.style.display = 'block';
+
+      document.getElementById('live-track-start-btn').disabled = false;
+    });
+
+    function runLiveTrackSample() {
+      const now = performance.now();
+      const achievedHz = liveTrackLastSampleAt ? 1000 / (now - liveTrackLastSampleAt) : 0;
+      liveTrackLastSampleAt = now;
+
+      const video = document.getElementById('live-track-feed');
+      const imageData = grabFramePixels(video);
+      const best = findBestMatch(
+        imageData, liveTrackAnchorPatch, liveTrackAnchorX, liveTrackAnchorY,
+        LIVE_TRACK_SEARCH_RADIUS, LIVE_TRACK_SEARCH_STEP
+      );
+
+      liveTrackAnchorPatch = extractPatch(imageData, best.x, best.y);
+      liveTrackAnchorX = best.x;
+      liveTrackAnchorY = best.y;
+      liveTrackCount++;
+
+      recordObservation(best.x, best.y, 'automatic', Date.now());
+
+      const rect = video.getBoundingClientRect();
+      const marker = document.getElementById('live-track-marker');
+      marker.style.left = `${best.x * (rect.width / video.videoWidth)}px`;
+      marker.style.top = `${best.y * (rect.height / video.videoHeight)}px`;
+
+      document.getElementById('live-track-status').textContent =
+        `Target: ${(1000 / LIVE_TRACK_INTERVAL_MS).toFixed(1)}/sec · Achieved: ${achievedHz.toFixed(1)}/sec · ` +
+        `Last position: (${Math.round(best.x)}, ${Math.round(best.y)}) · Auto-logged ${liveTrackCount} point(s) this flight.`;
+    }
+
+    document.getElementById('live-track-start-btn').addEventListener('click', () => {
+      liveTrackCount = 0;
+      liveTrackLastSampleAt = null;
+      document.getElementById('live-track-start-btn').style.display = 'none';
+      document.getElementById('live-track-stop-btn').style.display = 'block';
+      liveTrackIntervalId = setInterval(runLiveTrackSample, LIVE_TRACK_INTERVAL_MS);
+    });
+
+    document.getElementById('live-track-stop-btn').addEventListener('click', () => {
+      clearInterval(liveTrackIntervalId);
+      document.getElementById('live-track-start-btn').style.display = 'block';
+      document.getElementById('live-track-stop-btn').style.display = 'none';
     });
 
     async function refreshCurrentFlight() {
@@ -751,11 +871,16 @@
         `${taggedObservations.length} frames reviewed, ${tagged} tagged`;
     }
 
-    function recordObservation(pixelX, pixelY, observationSource) {
-      const video = document.getElementById('playback-feed');
+    function recordObservation(pixelX, pixelY, observationSource, localTimestampMs) {
+      if (localTimestampMs === undefined) {
+        // Recorded-review flow (Phase 4/12): timestamp comes from the
+        // scrubbed video's own position, not the wall clock.
+        const video = document.getElementById('playback-feed');
+        localTimestampMs = Math.round(video.currentTime * 1000);
+      }
       taggedObservations.push({
         frame_index: nextFrameIndex++,
-        local_timestamp_ms: Math.round(video.currentTime * 1000),
+        local_timestamp_ms: localTimestampMs,
         pixel_x: pixelX,
         pixel_y: pixelY,
         observation_source: observationSource || 'manual',

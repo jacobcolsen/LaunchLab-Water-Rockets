@@ -556,6 +556,15 @@ class ObservationSourceUploadTests(TestCase):
         obs = PixelObservation.objects.get(frame__frame_index=0)
         self.assertEqual(obs.observation_source, "assisted")
 
+    def test_automatic_source_is_persisted(self):
+        # Phase 13: live tracking uploads observation_source="automatic" -
+        # the last of PixelObservation's four documented sources, closing
+        # out the full set explicitly rather than leaving it assumed.
+        res = self._upload_one(0, observation_source="automatic")
+        self.assertEqual(res.status_code, 201, res.content)
+        obs = PixelObservation.objects.get(frame__frame_index=0)
+        self.assertEqual(obs.observation_source, "automatic")
+
     def test_missing_source_defaults_to_manual(self):
         res = self._upload_one(0)
         self.assertEqual(res.status_code, 201, res.content)
