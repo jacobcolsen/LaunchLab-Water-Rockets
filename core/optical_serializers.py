@@ -1,3 +1,4 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from .optical_debrief import compute_derived_flight_data
@@ -15,6 +16,11 @@ from .optical_models import (
 )
 
 SCHEMA_VERSION = "1.0"
+
+# How stale last_seen_at can be before a station reads as disconnected -
+# matches the clinometer's own CONNECTION_STALE_SECONDS (core/serializers.py)
+# and its heartbeat's 15s timeout (core/consumers.py).
+CONNECTION_STALE_SECONDS = 15
 
 
 class TrackingFlightSerializer(serializers.ModelSerializer):
@@ -51,6 +57,12 @@ class TrackingStationSerializer(serializers.ModelSerializer):
     # mirroring StationSerializer/StationCreateResponseSerializer's split
     # in core/serializers.py.
     calibrations = StationCalibrationSerializer(many=True, read_only=True)
+    # Computed rather than a stored flag - always freshly judged from how
+    # recently last_seen_at was touched, so it self-heals even if a clean
+    # disconnect signal never fires (e.g. the server process itself
+    # restarted mid-connection). Mirrors StationSerializer.get_connected
+    # in core/serializers.py exactly.
+    connected = serializers.SerializerMethodField()
 
     class Meta:
         model = TrackingStation
@@ -70,8 +82,15 @@ class TrackingStationSerializer(serializers.ModelSerializer):
             "calibrations",
             "clock_offset_ms",
             "clock_synced_at",
+            "connected",
         ]
         read_only_fields = ["clock_offset_ms", "clock_synced_at"]
+
+    def get_connected(self, obj):
+        if not obj.last_seen_at:
+            return False
+        age = (timezone.now() - obj.last_seen_at).total_seconds()
+        return age < CONNECTION_STALE_SECONDS
 
 
 POSITION_REQUIRED_FIELDS = {

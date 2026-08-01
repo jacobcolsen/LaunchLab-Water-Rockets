@@ -3,271 +3,440 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Optical Tracking Station</title>
   <link rel="stylesheet" href="{% static 'core/theme.css' %}">
   <style>
-    body { max-width: 480px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
-    h1 { font-size: 1.4rem; margin-bottom: 0.25rem; }
-    .hint { color: var(--text-muted); margin-bottom: 1.25rem; }
+    html, body { height: 100%; margin: 0; overflow: hidden; }
+    body { background: #05070d; color: var(--text-primary); }
     .error { color: var(--accent-red); }
-    label { display: block; margin-top: 0.9rem; font-weight: 700; font-size: 0.9rem; color: var(--text-muted); }
-    input[type="text"], input[type="number"], select {
-      width: 100%; margin-top: 0.3rem; box-sizing: border-box;
+    .hint { color: var(--text-muted); }
+
+    /* --- Step scaffold: one full-screen step visible at a time --- */
+    .step {
+      display: none; position: fixed; inset: 0; z-index: 1;
+      background: #05070d; flex-direction: column; align-items: center; justify-content: center;
+      text-align: center; padding: 1.75rem 1.25rem; box-sizing: border-box; overflow-y: auto;
     }
-    select {
-      font-family: inherit; font-size: 1rem; padding: 0.6rem 0.75rem; border-radius: 10px;
+    .step.active { display: flex; }
+    .step-icon { font-size: 3.5rem; margin-bottom: 0.5rem; }
+    .step h1 { font-size: 1.5rem; margin: 0 0 0.5rem; }
+    .step .hint { margin-bottom: 1.25rem; max-width: 320px; }
+    .step input[type="text"], .step input[type="number"], .step select {
+      width: 100%; max-width: 320px; box-sizing: border-box; margin: 0.4rem 0;
+      font-size: 1.05rem; padding: 0.7rem 0.9rem; border-radius: 10px;
       border: 1px solid var(--border); background: var(--surface-elevated); color: var(--text-primary);
     }
-    .field-hint { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.2rem; }
-    .source-fields { display: none; }
-    .source-fields.active { display: block; }
-    #gps-captured { margin-top: 0.5rem; color: var(--accent-green); font-size: 0.9rem; }
-    .btn { margin-top: 1rem; width: 100%; }
-    #save-btn { margin-top: 1.5rem; }
-    #status-card .badge { margin-left: 0.5rem; }
-    #status-summary { margin-top: 0.5rem; font-size: 1rem; }
+    .step label { display: block; font-weight: 700; font-size: 0.85rem; color: var(--text-muted); margin-top: 0.6rem; }
 
-    #camera-setup-card h2 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-    #camera-preview-wrap { position: relative; width: 100%; border-radius: 12px; overflow: hidden; background: #05070d; }
-    #camera-feed { width: 100%; display: block; }
-    #camera-preview-wrap.refine-mode { cursor: crosshair; }
-    #camera-crosshair {
-      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-      width: 40px; height: 40px; pointer-events: none;
+    .big-action-btn {
+      margin-top: 1.5rem; font-size: 1.3rem; font-weight: 800; padding: 1.1rem 2.2rem;
+      border-radius: 999px; border: none; cursor: pointer; color: #05070d;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-orange));
+      box-shadow: 0 0 20px var(--accent-cyan-glow);
+      animation: bigBtnPulse 2.2s ease-in-out infinite;
     }
-    #camera-crosshair::before, #camera-crosshair::after {
+    .big-action-btn:disabled { opacity: 0.5; cursor: default; animation: none; box-shadow: none; }
+    @keyframes bigBtnPulse {
+      0%, 100% { box-shadow: 0 0 14px var(--accent-cyan-glow); }
+      50% { box-shadow: 0 0 30px var(--accent-orange-glow); }
+    }
+
+    .link-btn {
+      margin-top: 1.25rem; background: none; border: none; color: var(--text-muted);
+      font-size: 0.95rem; text-decoration: underline; cursor: pointer; padding: 0.5rem;
+    }
+
+    .icon-btn {
+      position: fixed; z-index: 20; width: 48px; height: 48px; border-radius: 50%;
+      border: none; cursor: pointer; font-size: 1.4rem; font-weight: 800;
+      background: rgba(11, 15, 26, 0.75); color: var(--text-primary);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .back-icon { top: 1rem; left: 1rem; }
+    .skip-icon { bottom: 1.5rem; right: 1rem; font-size: 1.3rem; }
+
+    /* --- Shared full-screen camera view (moved between Aim/Record steps) --- */
+    #live-camera-view, #tag-video-wrap {
+      position: absolute; inset: 0; width: 100%; height: 100%; background: #05070d;
+    }
+    #camera-feed, #playback-feed {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+    }
+    #camera-crosshair, #tag-crosshair {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      width: 44px; height: 44px; pointer-events: none;
+    }
+    #camera-crosshair::before, #camera-crosshair::after,
+    #tag-crosshair::before, #tag-crosshair::after {
       content: ""; position: absolute; background: var(--accent-cyan);
       box-shadow: 0 0 6px var(--accent-cyan-glow);
     }
-    #camera-crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
-    #camera-crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
-    #live-orientation {
-      position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%);
-      background: rgba(11,15,26,0.65); padding: 0.25rem 0.75rem; border-radius: 999px;
-      font-size: 0.85rem; color: var(--accent-cyan); pointer-events: none; white-space: nowrap;
+    #camera-crosshair::before, #tag-crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
+    #camera-crosshair::after, #tag-crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
+    #live-orientation, #flight-pill, #tag-progress-pill {
+      position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 5;
+      background: rgba(11,15,26,0.7); padding: 0.35rem 0.9rem; border-radius: 999px;
+      font-size: 0.9rem; color: var(--accent-cyan); pointer-events: none; white-space: nowrap;
     }
-    #tap-target {
-      position: absolute; width: 24px; height: 24px; border: 2px solid var(--accent-orange);
-      border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
-      box-shadow: 0 0 10px var(--accent-orange-glow);
-    }
-    #calibration-status { margin-top: 0.75rem; font-size: 0.95rem; }
-    #aim-captured { margin-top: 0.4rem; color: var(--accent-green); font-size: 0.85rem; }
-    #refine-unavailable { margin-top: 0.75rem; }
+    #flight-pill { color: var(--text-primary); font-weight: 700; }
 
-    #record-card h2 { margin: 0 0 0.75rem; font-size: 1rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
-    #current-flight-display { font-size: 0.95rem; margin-bottom: 0.75rem; }
-    #playback-wrap { position: relative; width: 100%; border-radius: 12px; overflow: hidden; background: #05070d; cursor: crosshair; }
-    #playback-feed { width: 100%; display: block; }
-    .step-row { display: flex; gap: 0.6rem; }
-    .step-row .btn { flex: 1; }
-    #tag-counts { margin-top: 0.6rem; font-size: 0.9rem; color: var(--text-muted); }
-    #upload-status { margin-top: 0.75rem; font-size: 0.95rem; }
+    #step-aim, #step-record { padding: 0; }
+    #aim-gate, #aim-lock-row, #record-controls-row {
+      position: absolute; left: 0; right: 0; bottom: 2.5rem; z-index: 5;
+      display: flex; flex-direction: column; align-items: center;
+    }
+    #aim-gate .step-icon, #aim-gate h1, #aim-gate .hint { position: static; }
+    #aim-gate {
+      position: absolute; inset: 0; bottom: auto; top: 0; display: flex;
+      flex-direction: column; align-items: center; justify-content: center; z-index: 6;
+      background: #05070d;
+    }
+
+    #step-tag { padding: 0; }
     .obs-marker {
       position: absolute; width: 20px; height: 20px; border: 2px solid var(--accent-green);
       border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
     }
-    #suggestion-marker {
-      position: absolute; width: 28px; height: 28px; border: 2px dashed var(--accent-orange);
-      border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
+    #tag-hint {
+      position: absolute; top: 3.75rem; left: 50%; transform: translateX(-50%); z-index: 5;
+      max-width: 280px; margin: 0; text-align: center; text-shadow: 0 1px 4px rgba(0,0,0,0.8);
     }
-    #suggestion-row { margin-top: 0.5rem; }
 
-    #live-track-section { margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
-    #live-track-section h3 {
-      margin: 0 0 0.5rem; font-size: 0.95rem; color: var(--text-muted);
-      text-transform: uppercase; letter-spacing: 0.04em;
+    #advanced-position-fields { max-width: 320px; width: 100%; }
+    .source-fields { display: none; }
+    .source-fields.active { display: block; }
+    .field-hint { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.2rem; }
+
+    /* --- Ceremony overlays (unchanged from before) --- */
+    #station-countdown-overlay {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      background: transparent;
+      align-items: center; justify-content: center; flex-direction: column; text-align: center;
     }
-    #live-track-wrap {
-      position: relative; width: 100%; border-radius: 12px; overflow: hidden;
-      background: #05070d; cursor: crosshair;
+    #station-countdown-overlay.visible { display: flex; }
+    #station-countdown-content .countdown-number {
+      font-size: 8rem; font-weight: 900; line-height: 1; color: var(--accent-cyan);
+      animation: stationCountdownPop 0.3s ease-out;
+      text-shadow: 0 0 10px #000, 0 0 24px #000, 0 0 40px var(--accent-cyan-glow);
     }
-    #live-track-feed { width: 100%; display: block; }
-    #live-track-marker {
-      position: absolute; width: 24px; height: 24px; border: 3px solid var(--accent-red);
-      border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
-      box-shadow: 0 0 10px var(--accent-red);
+    #station-countdown-content .countdown-rocket {
+      font-size: 6rem; animation: stationRocketUp 0.5s ease-out;
+      filter: drop-shadow(0 0 10px #000);
     }
-    #live-track-status { margin-top: 0.6rem; font-size: 0.9rem; }
+    #station-countdown-content .countdown-launch {
+      font-size: 5rem; font-weight: 900; color: var(--accent-orange);
+      animation: stationLaunchPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); margin-top: 0.25rem;
+      text-shadow: 0 0 10px #000, 0 0 24px #000, 0 0 50px var(--accent-orange-glow);
+    }
+    #station-launch-flash {
+      position: fixed; inset: 0; z-index: 1001; pointer-events: none;
+      background: var(--accent-orange); opacity: 0; display: none;
+    }
+    #station-launch-flash.flashing { display: block; animation: stationLaunchFlash 0.5s ease-out; }
+    @keyframes stationCountdownPop {
+      0% { transform: scale(0.5); opacity: 1; }
+      15% { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    @keyframes stationLaunchPop {
+      0% { transform: scale(0.6); opacity: 1; }
+      40% { transform: scale(1.3); }
+      70% { transform: scale(0.95); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    @keyframes stationRocketUp {
+      0% { transform: translateY(30px) scale(0.9); opacity: 1; }
+      100% { transform: translateY(-50px) scale(1.1); opacity: 1; }
+    }
+    @keyframes stationLaunchFlash {
+      0% { opacity: 0.85; }
+      100% { opacity: 0; }
+    }
+    #report-ready-btn {
+      position: absolute; bottom: 2.5rem; left: 50%; transform: translateX(-50%); z-index: 5;
+      font-size: 1.4rem; font-weight: 800; padding: 1.1rem 2rem;
+      border-radius: 999px; border: none; cursor: pointer; color: #06281c;
+      background: linear-gradient(135deg, var(--accent-green), var(--accent-cyan));
+      box-shadow: 0 0 20px var(--accent-green-glow);
+      animation: bigBtnPulse 2.2s ease-in-out infinite;
+    }
+    #report-ready-btn:disabled { opacity: 0.6; cursor: default; box-shadow: none; animation: none; }
+    #stop-recording-btn {
+      position: absolute; bottom: 2.5rem; left: 50%; transform: translateX(-50%); z-index: 5;
+      font-size: 1.3rem; font-weight: 800; padding: 1.1rem 2rem;
+      border-radius: 999px; border: none; cursor: pointer; color: #fff;
+      background: var(--accent-red);
+      box-shadow: 0 0 20px rgba(239,68,68,0.6);
+    }
+    #recording-indicator {
+      position: absolute; top: 3.5rem; left: 50%; transform: translateX(-50%); z-index: 5;
+      background: rgba(239,68,68,0.85); color: #fff; padding: 0.35rem 0.9rem; border-radius: 999px;
+      font-size: 0.9rem; font-weight: 700; display: none;
+    }
+    #recording-indicator.visible { display: block; }
+    #station-countdown-content .countdown-touchdown {
+      font-size: 5rem; font-weight: 900; color: var(--accent-green);
+      animation: stationLaunchPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+      text-shadow: 0 0 10px #000, 0 0 24px #000, 0 0 50px var(--accent-green-glow);
+    }
+    #station-countdown-content .countdown-subtext {
+      font-size: 1.3rem; font-weight: 700; color: var(--text-primary); margin-top: 1rem;
+      text-shadow: 0 0 8px #000, 0 0 16px #000;
+    }
+    #station-launch-flash.touchdown-flash { background: var(--accent-green); }
   </style>
 </head>
 <body>
   {% if not session_id %}
     <p class="error">No session specified. Ask the tracking operator for the join link.</p>
   {% else %}
-    <h1>📷 Optical Tracking Station</h1>
-    <p class="hint">Set this phone's position. No camera setup yet — that's a later step.</p>
-
-    <div id="status-card" class="card card-accent" style="display:none;">
-      <div><strong id="status-label"></strong> <span id="status-badge" class="badge"></span></div>
-      <div id="status-summary"></div>
-      <button type="button" id="edit-btn" class="btn btn-secondary">✏️ Edit Position</button>
+    <div id="station-launch-flash"></div>
+    <div id="station-countdown-overlay">
+      <div id="station-countdown-content"></div>
     </div>
 
-    <div id="edit-confirm" class="confirm-overlay">
-      <div class="confirm-box card">
-        <p>Update this station's saved position?</p>
-        <button type="button" id="edit-confirm-yes" class="btn btn-danger">Yes, Edit</button>
-        <button type="button" id="edit-confirm-cancel" class="btn btn-secondary">Cancel</button>
+    <!-- Step 1: Position -->
+    <div id="step-position" class="step">
+      <div class="step-icon">📍</div>
+      <h1>Where Are You Standing?</h1>
+      <p class="hint">Tell us your name and get your location.</p>
+
+      <label for="label">Your name</label>
+      <input type="text" id="label" placeholder="e.g. Jamie">
+
+      <button type="button" id="gps-capture-btn" class="big-action-btn">📍 Get My Location</button>
+      <p id="position-error" class="error" style="display:none;"></p>
+
+      <button type="button" id="show-advanced-position-btn" class="link-btn">I need to enter this a different way</button>
+
+      <div id="advanced-position-fields" style="display:none;">
+        <label for="position_source">How do you know your position?</label>
+        <select id="position_source">
+          <option value="manual">✏️ Enter latitude/longitude manually</option>
+          <option value="surveyed_enu">📐 Enter a measured offset from the pad (meters)</option>
+          <option value="mock">🧪 Just testing — use a placeholder</option>
+        </select>
+
+        <div class="source-fields" data-source="manual">
+          <label for="manual_latitude">Latitude</label>
+          <input type="number" id="manual_latitude" step="any">
+          <label for="manual_longitude">Longitude</label>
+          <input type="number" id="manual_longitude" step="any">
+        </div>
+
+        <div class="source-fields" data-source="surveyed_enu">
+          <label for="surveyed_x">East of the pad (meters)</label>
+          <input type="number" id="surveyed_x" step="any">
+          <div id="surveyed-x-hint" class="field-hint"></div>
+          <label for="surveyed_y">North of the pad (meters)</label>
+          <input type="number" id="surveyed_y" step="any">
+          <div id="surveyed-y-hint" class="field-hint"></div>
+          <label for="surveyed_z">Height above the pad (meters, usually 0)</label>
+          <input type="number" id="surveyed_z" step="any" value="0">
+          <div id="surveyed-z-hint" class="field-hint"></div>
+        </div>
+
+        <div class="source-fields" data-source="mock">
+          <p class="hint" style="margin-top: 0.75rem;">Testing only — this station won't have a real position.</p>
+        </div>
+
+        <button type="button" id="save-advanced-position-btn" class="big-action-btn">Save Position</button>
       </div>
     </div>
 
-    <form id="position-form" class="card">
-      <label for="label">Your name / station label</label>
-      <input type="text" id="label" required>
-
-      <label for="position_source">How do you know your position?</label>
-      <select id="position_source">
-        <option value="gps">📍 Use my phone's GPS</option>
-        <option value="manual">✏️ Enter latitude/longitude manually</option>
-        <option value="surveyed_enu">📐 Enter a measured offset from the pad (meters)</option>
-        <option value="mock">🧪 Just testing — use a placeholder</option>
-      </select>
-
-      <div class="source-fields" data-source="gps">
-        <button type="button" id="gps-capture-btn" class="btn btn-secondary">📍 Capture My GPS Location</button>
-        <div id="gps-captured"></div>
-      </div>
-
-      <div class="source-fields" data-source="manual">
-        <label for="manual_latitude">Latitude</label>
-        <input type="number" id="manual_latitude" step="any">
-        <label for="manual_longitude">Longitude</label>
-        <input type="number" id="manual_longitude" step="any">
-      </div>
-
-      <div class="source-fields" data-source="surveyed_enu">
-        <label for="surveyed_x">East of the pad (meters)</label>
-        <input type="number" id="surveyed_x" step="any">
-        <div id="surveyed-x-hint" class="field-hint"></div>
-        <label for="surveyed_y">North of the pad (meters)</label>
-        <input type="number" id="surveyed_y" step="any">
-        <div id="surveyed-y-hint" class="field-hint"></div>
-        <label for="surveyed_z">Height above the pad (meters, usually 0)</label>
-        <input type="number" id="surveyed_z" step="any" value="0">
-        <div id="surveyed-z-hint" class="field-hint"></div>
-      </div>
-
-      <div class="source-fields" data-source="mock">
-        <p class="hint" style="margin-top: 0.75rem;">Testing only — this station won't have a real position.</p>
-      </div>
-
-      <p id="form-error" class="error" style="display:none;"></p>
-      <button type="submit" id="save-btn" class="btn btn-primary">Save Position</button>
-    </form>
-
-    <div id="camera-setup-card" class="card" style="display:none;">
-      <h2>Camera Setup</h2>
-
-      <div id="camera-permission-gate">
-        <p class="hint">Point this phone's camera roughly at the pad, then enable the camera and sensors.</p>
-        <button type="button" id="camera-enable-btn" class="btn btn-secondary">📷 Enable Camera &amp; Sensors</button>
+    <!-- Step 2: Aim Camera -->
+    <div id="step-aim" class="step">
+      <button type="button" id="back-to-position-btn" class="icon-btn back-icon">‹</button>
+      <div id="aim-gate">
+        <div class="step-icon">🎯</div>
+        <h1>Aim Your Camera</h1>
+        <p class="hint">Point your camera at the launch pad, then tap below.</p>
+        <button type="button" id="camera-enable-btn" class="big-action-btn">📷 Enable Camera</button>
         <p id="camera-permission-error" class="error" style="display:none;"></p>
       </div>
-
-      <div id="camera-scope" style="display:none;">
-        <div id="camera-preview-wrap">
-          <video id="camera-feed" autoplay playsinline muted></video>
-          <div id="camera-crosshair"></div>
-          <div id="live-orientation">facing --° · pitch --°</div>
-          <div id="tap-target" style="display:none;"></div>
-        </div>
-
-        <label for="fov_horizontal">Horizontal field of view (degrees, estimated)</label>
-        <input type="number" id="fov_horizontal" value="60" step="any">
-        <div class="field-hint">Most phone rear cameras are roughly 55-65°. Leave as-is if unsure.</div>
-
-        <button type="button" id="capture-aim-btn" class="btn btn-secondary">🎯 Capture Aim</button>
-        <div id="aim-captured"></div>
-
-        <button type="button" id="save-calibration-btn" class="btn btn-primary" disabled>Save Calibration</button>
-
-        <div id="calibration-status"></div>
-
-        <div id="refine-available" style="display:none;">
-          <button type="button" id="refine-btn" class="btn btn-secondary">🎯 Refine Accuracy (optional)</button>
-          <p class="hint" style="margin-top:0.5rem;">Tap exactly where the pad appears on screen.</p>
-        </div>
-        <div id="refine-unavailable" class="hint" style="display:none;">
-          Accuracy refinement isn't available yet for GPS/manual positions - it needs a
-          surveyed or mock position to compare against.
-        </div>
-      </div>
+      <div id="aim-camera-slot"></div>
+      <button type="button" id="lock-aim-btn" class="icon-btn" style="display:none; position:absolute; bottom:2.5rem; left:50%; transform:translateX(-50%); width:auto; height:auto; border-radius:999px; padding:1rem 2rem; font-size:1.2rem; background:linear-gradient(135deg, var(--accent-cyan), var(--accent-orange)); color:#05070d;">🎯 Lock In Aim</button>
     </div>
 
-    <div id="record-card" class="card" style="display:none;">
-      <h2>Record &amp; Tag Flight</h2>
-      <div id="current-flight-display" class="hint">Loading…</div>
-      <button type="button" id="refresh-flight-btn" class="btn btn-secondary">🔄 Refresh Flight</button>
+    <!-- Step 3: Record -->
+    <div id="step-record" class="step">
+      <button type="button" id="back-to-aim-btn" class="icon-btn back-icon">‹</button>
+      <div id="flight-pill">Flight: waiting…</div>
+      <div id="recording-indicator">⏺ Recording…</div>
+      <div id="record-camera-slot"></div>
+      <button type="button" id="report-ready-btn" disabled>👉 Click Here to Report Ready</button>
+      <button type="button" id="stop-recording-btn" style="display:none;">⏹ Stop Recording</button>
+    </div>
 
-      <button type="button" id="sync-clock-btn" class="btn btn-secondary">🕐 Sync Clock</button>
-      <div id="clock-sync-status" class="hint"></div>
-
-      <div id="record-controls" style="margin-top: 1rem;">
-        <button type="button" id="start-recording-btn" class="btn btn-primary">⏺ Start Recording</button>
-        <button type="button" id="stop-recording-btn" class="btn btn-danger" style="display:none;">⏹ Stop Recording</button>
-        <div id="record-status" class="hint"></div>
+    <!-- Step 4: Tag the Rocket -->
+    <div id="step-tag" class="step">
+      <button type="button" id="back-to-record-btn" class="icon-btn back-icon">‹</button>
+      <div id="tag-progress-pill">0 tagged</div>
+      <p class="hint" id="tag-hint">Tap the rocket to start tracking - then just watch, we'll take it from here!</p>
+      <div id="tag-video-wrap">
+        <video id="playback-feed" playsinline muted></video>
+        <div id="tag-crosshair"></div>
       </div>
+      <canvas id="tracking-canvas" style="display:none;"></canvas>
+      <button type="button" id="skip-frame-btn" class="icon-btn skip-icon">⏭️</button>
+    </div>
 
-      <div id="review-controls" style="display:none;">
-        <div id="playback-wrap">
-          <video id="playback-feed" playsinline muted></video>
-          <div id="suggestion-marker" style="display:none;"></div>
-        </div>
-        <canvas id="tracking-canvas" style="display:none;"></canvas>
-
-        <div class="step-row">
-          <button type="button" id="step-back-btn" class="btn btn-secondary">⏮ Step Back</button>
-          <button type="button" id="step-forward-btn" class="btn btn-secondary">⏭ Step Forward</button>
-        </div>
-        <label for="frame-step">Step size (seconds)</label>
-        <input type="number" id="frame-step" value="0.033" step="any">
-
-        <p class="hint" style="margin-top:0.75rem;">Tap the video where the rocket is, or skip if it's not visible.</p>
-        <div id="suggestion-row" style="display:none;">
-          <p class="hint" style="margin-top:0.5rem;">🔎 Suggested position ready - tap the video to correct it, or accept it below.</p>
-          <button type="button" id="accept-suggestion-btn" class="btn btn-secondary">✓ Accept Suggested Position</button>
-        </div>
-        <button type="button" id="skip-frame-btn" class="btn btn-secondary">⏭️ Skip (not visible)</button>
-        <div id="tag-counts">0 frames reviewed, 0 tagged</div>
-
-        <button type="button" id="upload-observations-btn" class="btn btn-primary">⬆️ Upload Observations</button>
-        <div id="upload-status"></div>
-      </div>
-
-      <div id="live-track-section">
-        <h3>🔴 Live Track (Experimental)</h3>
-        <p class="hint">
-          Tracks the rocket automatically in real time instead of recording then
-          reviewing. Whether this keeps up on your phone is unverified - this
-          prototype is how you find out.
-        </p>
-
-        <div id="live-track-wrap">
-          <video id="live-track-feed" autoplay playsinline muted></video>
-          <div id="live-track-marker" style="display:none;"></div>
-        </div>
-
-        <p class="hint" style="margin-top:0.5rem;">Tap the rocket (or the pad, before launch) to start tracking from there.</p>
-        <button type="button" id="live-track-start-btn" class="btn btn-primary" disabled>🔴 Start Live Tracking</button>
-        <button type="button" id="live-track-stop-btn" class="btn btn-danger" style="display:none;">⏹ Stop Live Tracking</button>
-        <div id="live-track-status" class="hint"></div>
-      </div>
+    <!-- Step 5: Upload -->
+    <div id="step-upload" class="step">
+      <div class="step-icon" id="upload-icon">⬆️</div>
+      <h1 id="upload-heading">Uploading…</h1>
+      <p id="upload-detail" class="hint"></p>
+      <button type="button" id="record-another-btn" class="big-action-btn" style="display:none;">🔄 Record Another Flight</button>
     </div>
 
   <script>
     const sessionId = {{ session_id|default:"null" }};
     const storageKey = `optical-station-${sessionId}`;
-    let isEditing = false;
-    let capturedGps = null;
 
-    const sourceBadge = {
-      gps: ['badge-green', '📍 GPS'],
-      manual: ['badge-cyan', '✏️ Manual'],
-      surveyed_enu: ['badge-orange', '📐 Surveyed'],
-      mock: ['badge-muted', '🧪 Mock'],
-    };
+    // --- Step navigation ---
+    const STEP_IDS = ['position', 'aim', 'record', 'tag', 'upload'];
+    function showStep(name) {
+      STEP_IDS.forEach((id) => {
+        document.getElementById(`step-${id}`).classList.toggle('active', id === name);
+      });
+    }
+
+    document.getElementById('back-to-position-btn').addEventListener('click', () => showStep('position'));
+    document.getElementById('back-to-aim-btn').addEventListener('click', () => showStep('aim'));
+    document.getElementById('back-to-record-btn').addEventListener('click', () => showStep('record'));
+
+    // --- Live-synced New Flight countdown (mirrors /control's countdown_start
+    // push - one "go" signal, this phone runs its own identical local timer
+    // in sync, same pattern as the clinometer's ws/sessions/ countdown_start) ---
+    let stationAudioCtx = null;
+    function stationPlayBeep(frequency, durationMs, volume = 0.18) {
+      try {
+        stationAudioCtx = stationAudioCtx || new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = stationAudioCtx.createOscillator();
+        const gain = stationAudioCtx.createGain();
+        oscillator.type = 'sine';
+        oscillator.frequency.value = frequency;
+        gain.gain.value = volume;
+        oscillator.connect(gain);
+        gain.connect(stationAudioCtx.destination);
+        oscillator.start();
+        gain.gain.exponentialRampToValueAtTime(0.0001, stationAudioCtx.currentTime + durationMs / 1000);
+        oscillator.stop(stationAudioCtx.currentTime + durationMs / 1000);
+      } catch (err) {
+        // Web Audio unavailable/blocked - the visual countdown still works fine without sound.
+      }
+    }
+
+    function stationSleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    async function runStationCountdown() {
+      const overlay = document.getElementById('station-countdown-overlay');
+      const content = document.getElementById('station-countdown-content');
+      const flash = document.getElementById('station-launch-flash');
+      overlay.classList.add('visible');
+
+      for (let n = 5; n >= 1; n--) {
+        content.innerHTML = `<div class="countdown-number">${n}</div>`;
+        stationPlayBeep(440, 150);
+        await stationSleep(1000);
+      }
+
+      content.innerHTML = `
+        <div class="countdown-rocket">🚀</div>
+        <div class="countdown-launch">LAUNCH!</div>
+      `;
+      flash.classList.add('flashing');
+      stationPlayBeep(880, 600);
+      setTimeout(() => flash.classList.remove('flashing'), 500);
+      await stationSleep(1200);
+
+      overlay.classList.remove('visible');
+    }
+
+    async function showTouchdownCelebration() {
+      const overlay = document.getElementById('station-countdown-overlay');
+      const content = document.getElementById('station-countdown-content');
+      const flash = document.getElementById('station-launch-flash');
+      overlay.classList.add('visible');
+      content.innerHTML = `
+        <div class="countdown-rocket">🎯</div>
+        <div class="countdown-touchdown">TOUCHDOWN!</div>
+        <div class="countdown-subtext">Great job - go check your footage.</div>
+      `;
+      flash.classList.add('flashing', 'touchdown-flash');
+      stationPlayBeep(660, 500);
+      setTimeout(() => flash.classList.remove('flashing', 'touchdown-flash'), 500);
+      await stationSleep(2500);
+      overlay.classList.remove('visible');
+    }
+
+    let countdownSocket = null;
+
+    // Tells the (already-open) socket which station this is, so the
+    // server can track live presence (last_seen_at) for the control
+    // page's Connected/Disconnected roster badge - sent here rather than
+    // as a connect-time query param since this socket opens before a
+    // station necessarily has a device_token yet (see
+    // core/optical_consumers.py).
+    function sendIdentify() {
+      const cached = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      if (cached && countdownSocket && countdownSocket.readyState === WebSocket.OPEN) {
+        countdownSocket.send(JSON.stringify({ type: 'identify', device_token: cached.device_token }));
+      }
+    }
+
+    const RECONNECT_DELAY_MS = 3000;
+
+    // A dropped connection (network hiccup, phone backgrounded and the OS
+    // killed it, etc.) shouldn't need a manual page reload to recover -
+    // this reconnects on its own and re-identifies immediately, so
+    // "connected" comes back green without the operator doing anything
+    // beyond just having the page open again. No visible "reconnecting…"
+    // UI - kept invisible, same as everywhere else on this page.
+    function connectCountdownSocket() {
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      countdownSocket = new WebSocket(`${wsProtocol}://${window.location.host}/ws/optical/sessions/${sessionId}/`);
+      countdownSocket.addEventListener('open', sendIdentify);
+      countdownSocket.addEventListener('close', () => {
+        setTimeout(connectCountdownSocket, RECONNECT_DELAY_MS);
+      });
+      countdownSocket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'ping') {
+          countdownSocket.send(JSON.stringify({ type: 'pong' }));
+        } else if (message.type === 'countdown_start') {
+          runStationCountdown();
+          autoStartRecording();
+        } else if (message.type === 'flight_landed') {
+          showTouchdownCelebration();
+          autoStopRecording();
+        }
+      };
+    }
+
+    if (sessionId) {
+      connectCountdownSocket();
+    }
+
+    document.getElementById('report-ready-btn').addEventListener('click', () => {
+      const cached = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      if (countdownSocket && countdownSocket.readyState === WebSocket.OPEN && cached) {
+        countdownSocket.send(JSON.stringify({
+          type: 'station_ready',
+          station_id: cached.id,
+          label: cached.label,
+        }));
+      }
+      const btn = document.getElementById('report-ready-btn');
+      btn.disabled = true;
+      btn.textContent = "🚀 Standby for Launch";
+    });
+
+    // --- Step 1: Position ---
+    let capturedGps = null;
 
     function metersToFeetHint(id, value) {
       const el = document.getElementById(id);
@@ -285,7 +454,6 @@
     document.getElementById('position_source').addEventListener('change', (e) => {
       showSourceFields(e.target.value);
     });
-    showSourceFields(document.getElementById('position_source').value);
 
     ['surveyed_x', 'surveyed_y', 'surveyed_z'].forEach((id) => {
       document.getElementById(id).addEventListener('input', (e) => {
@@ -293,104 +461,67 @@
       });
     });
 
+    document.getElementById('show-advanced-position-btn').addEventListener('click', () => {
+      document.getElementById('advanced-position-fields').style.display = 'block';
+      showSourceFields(document.getElementById('position_source').value);
+    });
+
+    async function savePosition(payload) {
+      const errorEl = document.getElementById('position-error');
+      errorEl.style.display = 'none';
+      const label = document.getElementById('label').value.trim();
+      if (!label) {
+        errorEl.textContent = 'Type your name first!';
+        errorEl.style.display = 'block';
+        return false;
+      }
+      const res = await fetch(`/api/optical/sessions/${sessionId}/stations/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ label, ...payload }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errorEl.textContent = data.detail || JSON.stringify(data);
+        errorEl.style.display = 'block';
+        return false;
+      }
+      localStorage.setItem(storageKey, JSON.stringify(data));
+      sendIdentify();
+      showStep('aim');
+      return true;
+    }
+
     document.getElementById('gps-capture-btn').addEventListener('click', () => {
+      const errorEl = document.getElementById('position-error');
+      errorEl.style.display = 'none';
       if (!navigator.geolocation) {
-        document.getElementById('gps-captured').textContent = 'GPS is not available on this device.';
+        errorEl.textContent = 'GPS is not available on this device - try "enter it a different way" below.';
+        errorEl.style.display = 'block';
         return;
       }
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           capturedGps = {
+            position_source: 'gps',
             gps_latitude: pos.coords.latitude,
             gps_longitude: pos.coords.longitude,
             gps_altitude_m: pos.coords.altitude,
           };
-          document.getElementById('gps-captured').textContent =
-            `Captured: ${pos.coords.latitude.toFixed(5)}, ${pos.coords.longitude.toFixed(5)}`;
+          savePosition(capturedGps);
         },
         (err) => {
-          document.getElementById('gps-captured').textContent = `Could not get location: ${err.message}`;
+          errorEl.textContent = `Could not get location: ${err.message}`;
+          errorEl.style.display = 'block';
         },
         { enableHighAccuracy: true, timeout: 15000 }
       );
     });
 
-    function formatSummary(station) {
-      if (station.position_source === 'gps' || station.position_source === 'manual') {
-        if (station.gps_latitude == null || station.gps_longitude == null) return 'No coordinates saved.';
-        return `${station.gps_latitude.toFixed(5)}, ${station.gps_longitude.toFixed(5)}`;
-      }
-      if (station.position_source === 'surveyed_enu') {
-        return `${station.surveyed_x_m.toFixed(1)}, ${station.surveyed_y_m.toFixed(1)}, ${station.surveyed_z_m.toFixed(1)} m from the pad`;
-      }
-      return 'No real position — testing only.';
-    }
-
-    function showStatus(station) {
-      document.getElementById('position-form').style.display = 'none';
-      document.getElementById('status-card').style.display = 'block';
-      document.getElementById('status-label').textContent = station.label;
-      const [cls, badgeLabel] = sourceBadge[station.position_source] || ['badge-muted', station.position_source];
-      const badge = document.getElementById('status-badge');
-      badge.className = `badge ${cls}`;
-      badge.textContent = badgeLabel;
-      document.getElementById('status-summary').textContent = formatSummary(station);
-
-      document.getElementById('camera-setup-card').style.display = 'block';
-      updateRefineAvailability(station);
-      if (station.latest_calibration) {
-        showCalibrationStatus(station.latest_calibration);
-      }
-    }
-
-    function prefillForm(station) {
-      document.getElementById('label').value = station.label;
-      document.getElementById('position_source').value = station.position_source;
-      showSourceFields(station.position_source);
-      if (station.gps_latitude != null) document.getElementById('manual_latitude').value = station.gps_latitude;
-      if (station.gps_longitude != null) document.getElementById('manual_longitude').value = station.gps_longitude;
-      if (station.surveyed_x_m != null) document.getElementById('surveyed_x').value = station.surveyed_x_m;
-      if (station.surveyed_y_m != null) document.getElementById('surveyed_y').value = station.surveyed_y_m;
-      if (station.surveyed_z_m != null) document.getElementById('surveyed_z').value = station.surveyed_z_m;
-      capturedGps = null;
-      document.getElementById('gps-captured').textContent = '';
-    }
-
-    document.getElementById('edit-btn').addEventListener('click', () => {
-      document.getElementById('edit-confirm').style.display = 'flex';
-    });
-    document.getElementById('edit-confirm-cancel').addEventListener('click', () => {
-      document.getElementById('edit-confirm').style.display = 'none';
-    });
-    document.getElementById('edit-confirm-yes').addEventListener('click', () => {
-      document.getElementById('edit-confirm').style.display = 'none';
-      const cached = JSON.parse(localStorage.getItem(storageKey));
-      isEditing = true;
-      prefillForm(cached);
-      document.getElementById('status-card').style.display = 'none';
-      document.getElementById('camera-setup-card').style.display = 'none';
-      document.getElementById('position-form').style.display = 'block';
-    });
-
-    document.getElementById('position-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      const errorEl = document.getElementById('form-error');
-      errorEl.style.display = 'none';
-
+    document.getElementById('save-advanced-position-btn').addEventListener('click', () => {
       const positionSource = document.getElementById('position_source').value;
-      const payload = {
-        label: document.getElementById('label').value,
-        position_source: positionSource,
-      };
-
-      if (positionSource === 'gps') {
-        if (!capturedGps) {
-          errorEl.textContent = 'Tap "Capture My GPS Location" first.';
-          errorEl.style.display = 'block';
-          return;
-        }
-        Object.assign(payload, capturedGps);
-      } else if (positionSource === 'manual') {
+      const payload = { position_source: positionSource };
+      if (positionSource === 'manual') {
         payload.gps_latitude = parseFloat(document.getElementById('manual_latitude').value);
         payload.gps_longitude = parseFloat(document.getElementById('manual_longitude').value);
       } else if (positionSource === 'surveyed_enu') {
@@ -398,68 +529,19 @@
         payload.surveyed_y_m = parseFloat(document.getElementById('surveyed_y').value);
         payload.surveyed_z_m = parseFloat(document.getElementById('surveyed_z').value || '0');
       }
-
-      let res;
-      if (isEditing) {
-        const cached = JSON.parse(localStorage.getItem(storageKey));
-        res = await fetch('/api/optical/stations/position/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ device_token: cached.device_token, ...payload }),
-        });
-      } else {
-        res = await fetch(`/api/optical/sessions/${sessionId}/stations/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-      }
-
-      const data = await res.json();
-      if (!res.ok) {
-        errorEl.textContent = data.detail || JSON.stringify(data);
-        errorEl.style.display = 'block';
-        return;
-      }
-
-      localStorage.setItem(storageKey, JSON.stringify(data));
-      isEditing = false;
-      showStatus(data);
+      savePosition(payload);
     });
 
-    // --- Camera Setup (Phase 3: calibration) ---
+    // --- Step 2: Aim Camera ---
     let cameraStream = null;
     let latestOrientation = { facing: null, pitch: null };
-    let capturedAim = null;
-    let refineTapMode = false;
+    const FOV_HORIZONTAL_DEG = 60; // estimated - matches most phone rear cameras closely enough
 
-    const orientationSourceLabel = {
-      sensor: '📡 Sensor',
-      manual: '✏️ Manual',
-      geometry_refined: '🎯 Refined',
-    };
-
-    function updateRefineAvailability(station) {
-      const available = station.position_source === 'surveyed_enu' || station.position_source === 'mock';
-      document.getElementById('refine-available').style.display = available ? 'block' : 'none';
-      document.getElementById('refine-unavailable').style.display = available ? 'none' : 'block';
-    }
-
-    function showCalibrationStatus(calibration) {
-      const sourceLabel = orientationSourceLabel[calibration.orientation_source] || calibration.orientation_source;
-      document.getElementById('calibration-status').innerHTML =
-        `<span class="badge badge-green">Saved</span> ${sourceLabel} ` +
-        `· facing ${calibration.facing_deg.toFixed(1)}°, pitch ${calibration.pitch_deg.toFixed(1)}°`;
-      document.getElementById('record-card').style.display = 'block';
-      refreshCurrentFlight();
-    }
-
-    function persistCalibration(calibration) {
-      const cached = JSON.parse(localStorage.getItem(storageKey));
-      cached.latest_calibration = calibration;
-      localStorage.setItem(storageKey, JSON.stringify(cached));
-      showCalibrationStatus(calibration);
-    }
+    // A camera can get bumped between flights, so each new flight requires
+    // a fresh aim-lock before the station can report ready again - set
+    // when a flight wraps up (record-another-btn), cleared once
+    // lock-aim-btn succeeds.
+    let mustReaimBeforeNextFlight = false;
 
     function startOrientationListener() {
       window.addEventListener('deviceorientation', (event) => {
@@ -484,38 +566,56 @@
           const motionPerm = await DeviceOrientationEvent.requestPermission();
           if (motionPerm !== 'granted') throw new Error('Motion sensor permission was denied.');
         }
-        cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-        document.getElementById('camera-feed').srcObject = cameraStream;
-        document.getElementById('live-track-feed').srcObject = cameraStream;
-        startOrientationListener();
-        document.getElementById('camera-permission-gate').style.display = 'none';
-        document.getElementById('camera-scope').style.display = 'block';
+        if (!cameraStream) {
+          cameraStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+          const video = document.createElement('video');
+          video.id = 'camera-feed';
+          video.autoplay = true;
+          video.playsInline = true;
+          video.muted = true;
+          video.srcObject = cameraStream;
+          const crosshair = document.createElement('div');
+          crosshair.id = 'camera-crosshair';
+          const orientationPill = document.createElement('div');
+          orientationPill.id = 'live-orientation';
+          orientationPill.textContent = 'facing --° · pitch --°';
+          const liveView = document.createElement('div');
+          liveView.id = 'live-camera-view';
+          liveView.append(video, crosshair, orientationPill);
+          document.getElementById('aim-camera-slot').appendChild(liveView);
+          startOrientationListener();
+          measureAndSyncClock(); // silent, background - nothing to show the operator
+        }
+
+        document.getElementById('aim-gate').style.display = 'none';
+
+        const cached = JSON.parse(localStorage.getItem(storageKey) || 'null');
+        if (cached && cached.latest_calibration && !mustReaimBeforeNextFlight) {
+          // Already aimed & calibrated this station before - no need to redo it.
+          moveCameraViewToRecordStep();
+          showStep('record');
+        } else {
+          document.getElementById('lock-aim-btn').style.display = 'block';
+        }
       } catch (err) {
         errorEl.textContent = `Could not enable camera/sensors: ${err.message}`;
         errorEl.style.display = 'block';
       }
     });
 
-    document.getElementById('capture-aim-btn').addEventListener('click', () => {
+    document.getElementById('lock-aim-btn').addEventListener('click', async () => {
       if (latestOrientation.facing == null || latestOrientation.pitch == null) {
-        document.getElementById('aim-captured').textContent =
-          'No sensor reading yet - make sure motion & compass access is enabled.';
+        const errorEl = document.getElementById('camera-permission-error');
+        errorEl.textContent = 'No compass reading yet - move the phone slightly and try again.';
+        errorEl.style.display = 'block';
         return;
       }
-      capturedAim = { facing_deg: latestOrientation.facing, pitch_deg: latestOrientation.pitch };
-      document.getElementById('aim-captured').textContent =
-        `Captured: facing ${capturedAim.facing_deg.toFixed(1)}°, pitch ${capturedAim.pitch_deg.toFixed(1)}°`;
-      document.getElementById('save-calibration-btn').disabled = false;
-    });
-
-    document.getElementById('save-calibration-btn').addEventListener('click', async () => {
       const cached = JSON.parse(localStorage.getItem(storageKey));
       const video = document.getElementById('camera-feed');
       const settings = cameraStream.getVideoTracks()[0].getSettings();
       const width = settings.width || video.videoWidth;
       const height = settings.height || video.videoHeight;
-      const fovH = parseFloat(document.getElementById('fov_horizontal').value);
-      const fovV = 2 * Math.atan(Math.tan((fovH * Math.PI / 180) / 2) * (height / width)) * 180 / Math.PI;
+      const fovV = 2 * Math.atan(Math.tan((FOV_HORIZONTAL_DEG * Math.PI / 180) / 2) * (height / width)) * 180 / Math.PI;
 
       const res = await fetch('/api/optical/stations/calibration/', {
         method: 'POST',
@@ -524,80 +624,150 @@
           device_token: cached.device_token,
           image_width_px: width,
           image_height_px: height,
-          fov_horizontal_deg: fovH,
+          fov_horizontal_deg: FOV_HORIZONTAL_DEG,
           fov_vertical_deg: fovV,
-          facing_deg: capturedAim.facing_deg,
-          pitch_deg: capturedAim.pitch_deg,
+          facing_deg: latestOrientation.facing,
+          pitch_deg: latestOrientation.pitch,
           roll_deg: 0,
           orientation_source: 'sensor',
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        document.getElementById('calibration-status').innerHTML =
-          `<span class="error">${data.detail || 'Save failed.'}</span>`;
+        const errorEl = document.getElementById('camera-permission-error');
+        errorEl.textContent = data.detail || 'Could not save calibration - try again.';
+        errorEl.style.display = 'block';
         return;
       }
-      persistCalibration(data);
+      cached.latest_calibration = data;
+      localStorage.setItem(storageKey, JSON.stringify(cached));
+      mustReaimBeforeNextFlight = false;
+
+      moveCameraViewToRecordStep();
+      showStep('record');
     });
 
-    document.getElementById('refine-btn').addEventListener('click', () => {
-      refineTapMode = true;
-      document.getElementById('camera-preview-wrap').classList.add('refine-mode');
-    });
+    function moveCameraViewToRecordStep() {
+      const liveView = document.getElementById('live-camera-view');
+      if (liveView) document.getElementById('record-camera-slot').appendChild(liveView);
+      document.getElementById('lock-aim-btn').style.display = 'none';
+      document.getElementById('report-ready-btn').disabled = false;
+      refreshCurrentFlight();
+      if (!flightPollIntervalId) {
+        flightPollIntervalId = setInterval(refreshCurrentFlight, 3000);
+      }
+    }
 
-    document.getElementById('camera-preview-wrap').addEventListener('click', async (e) => {
-      if (!refineTapMode) return;
-      refineTapMode = false;
-      document.getElementById('camera-preview-wrap').classList.remove('refine-mode');
+    const CLOCK_SYNC_ROUND_TRIPS = 5;
 
-      const video = document.getElementById('camera-feed');
-      const rect = video.getBoundingClientRect();
-      const scaleX = video.videoWidth / rect.width;
-      const scaleY = video.videoHeight / rect.height;
-      const tapX = (e.clientX - rect.left) * scaleX;
-      const tapY = (e.clientY - rect.top) * scaleY;
+    async function measureClockOffset() {
+      let best = null;
+      for (let i = 0; i < CLOCK_SYNC_ROUND_TRIPS; i++) {
+        const t0 = Date.now();
+        const res = await fetch('/api/optical/server-time/');
+        const data = await res.json();
+        const t2 = Date.now();
+        const roundTripMs = t2 - t0;
+        const offsetMs = data.server_time_ms - (t0 + t2) / 2;
+        if (best === null || roundTripMs < best.roundTripMs) {
+          best = { offsetMs, roundTripMs };
+        }
+      }
+      return best;
+    }
 
-      const marker = document.getElementById('tap-target');
-      marker.style.left = `${e.clientX - rect.left}px`;
-      marker.style.top = `${e.clientY - rect.top}px`;
-      marker.style.display = 'block';
-
-      const cached = JSON.parse(localStorage.getItem(storageKey));
-      const res = await fetch('/api/optical/stations/calibration/refine/', {
+    async function measureAndSyncClock() {
+      const { offsetMs, roundTripMs } = await measureClockOffset();
+      const cached = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      if (!cached) return;
+      await fetch('/api/optical/stations/clock-sync/', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_token: cached.device_token, tap_pixel_x: tapX, tap_pixel_y: tapY }),
+        body: JSON.stringify({ device_token: cached.device_token, offset_ms: offsetMs, round_trip_ms: roundTripMs }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        document.getElementById('calibration-status').innerHTML =
-          `<span class="error">${data.detail || 'Refine failed.'}</span>`;
-        return;
-      }
-      persistCalibration(data);
-    });
+    }
 
-    // --- Record & Tag Flight (Phase 4: manual observations) ---
+    // --- Step 3: Record ---
     let mediaRecorder = null;
     let recordedChunks = [];
     let taggedObservations = []; // {frame_index, local_timestamp_ms, pixel_x, pixel_y, observation_source}
     let nextFrameIndex = 0;
     let currentFlightNumber = null;
+    let flightPollIntervalId = null;
+    const FRAME_STEP_SECONDS = 1 / 30;
 
-    // --- Assisted tracking (Phase 12): simple block-matching, no ML ---
-    // "Anchor" is the last confirmed tap's small pixel patch. On arriving
-    // at a new frame, search a small neighborhood around the anchor's
-    // last position for the closest-matching patch (lowest grayscale
-    // sum-of-absolute-differences) and offer it as a suggestion.
+    async function refreshCurrentFlight() {
+      const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
+      const flights = await res.json();
+      const pill = document.getElementById('flight-pill');
+      if (flights.length === 0) {
+        currentFlightNumber = null;
+        pill.textContent = 'Flight: waiting…';
+      } else {
+        currentFlightNumber = flights[flights.length - 1].number;
+        pill.textContent = `Flight #${currentFlightNumber}`;
+      }
+    }
+
+    // Recording is never started by a tap - it auto-starts the instant the
+    // launch controller's countdown begins (countdown_start, above), so
+    // there's a few seconds of buffer before actual liftoff. Before that,
+    // this screen is just the camera view + reporting ready. Stopping
+    // stays a manual call - the operator judges when the flight is over.
+    function autoStartRecording() {
+      if (!cameraStream || (mediaRecorder && mediaRecorder.state === 'recording')) return;
+
+      recordedChunks = [];
+      mediaRecorder = new MediaRecorder(cameraStream);
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunks.push(e.data);
+      };
+      mediaRecorder.onstop = () => {
+        const blob = new Blob(recordedChunks, { type: recordedChunks[0]?.type || 'video/webm' });
+        const playback = document.getElementById('playback-feed');
+        playback.src = URL.createObjectURL(blob);
+        anchorPatch = null;
+        trackingStarted = false;
+        document.getElementById('tag-hint').style.display = 'block';
+        document.getElementById('skip-frame-btn').style.display = 'block';
+        document.getElementById('recording-indicator').classList.remove('visible');
+        document.getElementById('stop-recording-btn').style.display = 'none';
+        showStep('tag');
+      };
+      mediaRecorder.start();
+      document.getElementById('report-ready-btn').style.display = 'none';
+      document.getElementById('recording-indicator').classList.add('visible');
+      document.getElementById('stop-recording-btn').style.display = 'block';
+    }
+
+    // Mirrors autoStartRecording - stops the instant the controller marks
+    // Touchdown, same as the manual Stop button below, so nobody has to
+    // remember to tap it once the flight's actually over.
+    function autoStopRecording() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+    }
+
+    document.getElementById('stop-recording-btn').addEventListener('click', () => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+    });
+
+    // --- Automatic tracking (Phase 12's block-matching, driven unattended) ---
     const PATCH_RADIUS = 12;
     const SEARCH_RADIUS = 40;
     const SEARCH_STEP = 2;
+    // Average per-pixel grayscale difference (0-255) above which a match is
+    // untrusted and the frame is recorded as "no observation" instead. A
+    // starting guess, not tuned against real device footage yet.
+    const CONFIDENCE_SAD_THRESHOLD = 30;
 
     let anchorPatch = null;
     let anchorX = null;
     let anchorY = null;
-    let suggestion = null;
+    let trackingStarted = false;
 
     function grabFramePixels(video) {
       const canvas = document.getElementById('tracking-canvas');
@@ -647,234 +817,50 @@
       anchorY = pixelY;
     }
 
-    function hideSuggestion() {
-      suggestion = null;
-      document.getElementById('suggestion-marker').style.display = 'none';
-      document.getElementById('suggestion-row').style.display = 'none';
+    function waitForSeek(video) {
+      return new Promise((resolve) => video.addEventListener('seeked', resolve, { once: true }));
     }
 
-    function showSuggestionMarker(x, y) {
+    // Runs unattended from the seed tap to the end of the clip: steps one
+    // frame at a time, matches against the last good anchor, and either
+    // records a real point (confident) or "no observation" (not confident) -
+    // never a guess dressed up as a real sighting. A low-confidence frame
+    // keeps the last good anchor rather than clearing it, since there's no
+    // human left to re-tap and reacquire the rocket.
+    async function runAutomaticTracking() {
       const video = document.getElementById('playback-feed');
-      const rect = video.getBoundingClientRect();
-      const marker = document.getElementById('suggestion-marker');
-      marker.style.left = `${x * (rect.width / video.videoWidth)}px`;
-      marker.style.top = `${y * (rect.height / video.videoHeight)}px`;
-      marker.style.display = 'block';
-      document.getElementById('suggestion-row').style.display = 'block';
-    }
+      const pill = document.getElementById('tag-progress-pill');
+      const totalFrames = isFinite(video.duration) ? Math.floor(video.duration / FRAME_STEP_SECONDS) : 0;
 
-    function runSuggestion() {
-      if (!anchorPatch) {
-        hideSuggestion();
-        return;
-      }
-      const imageData = grabFramePixels(document.getElementById('playback-feed'));
-      const best = findBestMatch(imageData, anchorPatch, anchorX, anchorY);
-      suggestion = { x: best.x, y: best.y };
-      showSuggestionMarker(best.x, best.y);
-    }
+      while (isFinite(video.duration) && video.currentTime + FRAME_STEP_SECONDS < video.duration) {
+        video.currentTime += FRAME_STEP_SECONDS;
+        await waitForSeek(video);
 
-    document.getElementById('playback-feed').addEventListener('seeked', runSuggestion);
-
-    document.getElementById('accept-suggestion-btn').addEventListener('click', () => {
-      if (!suggestion) return;
-      recordObservation(suggestion.x, suggestion.y, 'assisted');
-      captureAnchor(suggestion.x, suggestion.y);
-      hideSuggestion();
-    });
-
-    // --- Live Tracking (Phase 13): experimental feasibility prototype ---
-    // Reuses Phase 12's block-matching (grabFramePixels/extractPatch/
-    // findBestMatch) against the *live* camera feed instead of a
-    // recorded one, on a timer instead of a step-by-step review. The
-    // search radius is wider than Phase 12's - between live samples the
-    // rocket can travel much further than between individual recorded
-    // frames - but that number, and the achieved sample rate below, are
-    // both educated guesses: this prototype's whole point is to reveal,
-    // on real hardware, whether they're actually adequate.
-    const LIVE_TRACK_INTERVAL_MS = 200; // 5 Hz target
-    const LIVE_TRACK_SEARCH_RADIUS = 100;
-    const LIVE_TRACK_SEARCH_STEP = 4;
-
-    let liveTrackAnchorPatch = null;
-    let liveTrackAnchorX = null;
-    let liveTrackAnchorY = null;
-    let liveTrackIntervalId = null;
-    let liveTrackLastSampleAt = null;
-    let liveTrackCount = 0;
-
-    document.getElementById('live-track-wrap').addEventListener('click', (e) => {
-      const video = document.getElementById('live-track-feed');
-      const rect = video.getBoundingClientRect();
-      const scaleX = video.videoWidth / rect.width;
-      const scaleY = video.videoHeight / rect.height;
-      const pixelX = (e.clientX - rect.left) * scaleX;
-      const pixelY = (e.clientY - rect.top) * scaleY;
-
-      liveTrackAnchorPatch = extractPatch(grabFramePixels(video), pixelX, pixelY);
-      liveTrackAnchorX = pixelX;
-      liveTrackAnchorY = pixelY;
-
-      const marker = document.getElementById('live-track-marker');
-      marker.style.left = `${e.clientX - rect.left}px`;
-      marker.style.top = `${e.clientY - rect.top}px`;
-      marker.style.display = 'block';
-
-      document.getElementById('live-track-start-btn').disabled = false;
-    });
-
-    function runLiveTrackSample() {
-      const now = performance.now();
-      const achievedHz = liveTrackLastSampleAt ? 1000 / (now - liveTrackLastSampleAt) : 0;
-      liveTrackLastSampleAt = now;
-
-      const video = document.getElementById('live-track-feed');
-      const imageData = grabFramePixels(video);
-      const best = findBestMatch(
-        imageData, liveTrackAnchorPatch, liveTrackAnchorX, liveTrackAnchorY,
-        LIVE_TRACK_SEARCH_RADIUS, LIVE_TRACK_SEARCH_STEP
-      );
-
-      liveTrackAnchorPatch = extractPatch(imageData, best.x, best.y);
-      liveTrackAnchorX = best.x;
-      liveTrackAnchorY = best.y;
-      liveTrackCount++;
-
-      recordObservation(best.x, best.y, 'automatic', Date.now());
-
-      const rect = video.getBoundingClientRect();
-      const marker = document.getElementById('live-track-marker');
-      marker.style.left = `${best.x * (rect.width / video.videoWidth)}px`;
-      marker.style.top = `${best.y * (rect.height / video.videoHeight)}px`;
-
-      document.getElementById('live-track-status').textContent =
-        `Target: ${(1000 / LIVE_TRACK_INTERVAL_MS).toFixed(1)}/sec · Achieved: ${achievedHz.toFixed(1)}/sec · ` +
-        `Last position: (${Math.round(best.x)}, ${Math.round(best.y)}) · Auto-logged ${liveTrackCount} point(s) this flight.`;
-    }
-
-    document.getElementById('live-track-start-btn').addEventListener('click', () => {
-      liveTrackCount = 0;
-      liveTrackLastSampleAt = null;
-      document.getElementById('live-track-start-btn').style.display = 'none';
-      document.getElementById('live-track-stop-btn').style.display = 'block';
-      liveTrackIntervalId = setInterval(runLiveTrackSample, LIVE_TRACK_INTERVAL_MS);
-    });
-
-    document.getElementById('live-track-stop-btn').addEventListener('click', () => {
-      clearInterval(liveTrackIntervalId);
-      document.getElementById('live-track-start-btn').style.display = 'block';
-      document.getElementById('live-track-stop-btn').style.display = 'none';
-    });
-
-    async function refreshCurrentFlight() {
-      const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
-      const flights = await res.json();
-      const el = document.getElementById('current-flight-display');
-      if (flights.length === 0) {
-        currentFlightNumber = null;
-        el.textContent = 'No flight started yet - ask the operator to tap New Flight.';
-      } else {
-        currentFlightNumber = flights[flights.length - 1].number;
-        el.textContent = `Flight #${currentFlightNumber}`;
-      }
-    }
-
-    document.getElementById('refresh-flight-btn').addEventListener('click', refreshCurrentFlight);
-
-    const CLOCK_SYNC_ROUND_TRIPS = 5;
-
-    async function measureClockOffset() {
-      let best = null;
-      for (let i = 0; i < CLOCK_SYNC_ROUND_TRIPS; i++) {
-        const t0 = Date.now();
-        const res = await fetch('/api/optical/server-time/');
-        const data = await res.json();
-        const t2 = Date.now();
-        const roundTripMs = t2 - t0;
-        const offsetMs = data.server_time_ms - (t0 + t2) / 2;
-        if (best === null || roundTripMs < best.roundTripMs) {
-          best = { offsetMs, roundTripMs };
+        const imageData = grabFramePixels(video);
+        const best = findBestMatch(imageData, anchorPatch, anchorX, anchorY);
+        const confidence = best.sad / anchorPatch.length;
+        if (confidence < CONFIDENCE_SAD_THRESHOLD) {
+          recordObservation(best.x, best.y, 'automatic');
+          captureAnchor(best.x, best.y);
+        } else {
+          recordObservation(null, null);
         }
+
+        const frameNumber = Math.round(video.currentTime / FRAME_STEP_SECONDS);
+        pill.textContent = `🤖 Tracking… frame ${frameNumber}/${totalFrames}`;
       }
-      return best;
+
+      enterUploadStep();
     }
-
-    document.getElementById('sync-clock-btn').addEventListener('click', async () => {
-      const statusEl = document.getElementById('clock-sync-status');
-      statusEl.textContent = 'Syncing…';
-      const { offsetMs, roundTripMs } = await measureClockOffset();
-
-      const cached = JSON.parse(localStorage.getItem(storageKey));
-      const res = await fetch('/api/optical/stations/clock-sync/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          device_token: cached.device_token,
-          offset_ms: offsetMs,
-          round_trip_ms: roundTripMs,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        statusEl.innerHTML = `<span class="error">${data.detail || 'Sync failed.'}</span>`;
-        return;
-      }
-      statusEl.textContent =
-        `Synced (offset: ${offsetMs.toFixed(0)} ms, round-trip: ${roundTripMs.toFixed(0)} ms)` +
-        (data.backfilled_frames ? ` - backfilled ${data.backfilled_frames} earlier frame(s)` : '');
-    });
-
-    document.getElementById('start-recording-btn').addEventListener('click', () => {
-      recordedChunks = [];
-      mediaRecorder = new MediaRecorder(cameraStream);
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) recordedChunks.push(e.data);
-      };
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(recordedChunks, { type: recordedChunks[0]?.type || 'video/webm' });
-        const playback = document.getElementById('playback-feed');
-        playback.src = URL.createObjectURL(blob);
-        anchorPatch = null;
-        hideSuggestion();
-        document.getElementById('record-controls').style.display = 'none';
-        document.getElementById('review-controls').style.display = 'block';
-      };
-      mediaRecorder.start();
-      document.getElementById('record-status').textContent = '⏺ Recording…';
-      document.getElementById('start-recording-btn').style.display = 'none';
-      document.getElementById('stop-recording-btn').style.display = 'block';
-    });
-
-    document.getElementById('stop-recording-btn').addEventListener('click', () => {
-      mediaRecorder.stop();
-      document.getElementById('record-status').textContent = '';
-      document.getElementById('stop-recording-btn').style.display = 'none';
-    });
-
-    function frameStepSeconds() {
-      return parseFloat(document.getElementById('frame-step').value) || (1 / 30);
-    }
-
-    document.getElementById('step-back-btn').addEventListener('click', () => {
-      const video = document.getElementById('playback-feed');
-      video.currentTime = Math.max(0, video.currentTime - frameStepSeconds());
-    });
-
-    document.getElementById('step-forward-btn').addEventListener('click', () => {
-      const video = document.getElementById('playback-feed');
-      video.currentTime = Math.min(video.duration || Infinity, video.currentTime + frameStepSeconds());
-    });
 
     function updateTagCounts() {
       const tagged = taggedObservations.filter((o) => o.pixel_x != null).length;
-      document.getElementById('tag-counts').textContent =
-        `${taggedObservations.length} frames reviewed, ${tagged} tagged`;
+      document.getElementById('tag-progress-pill').textContent =
+        `${taggedObservations.length} reviewed, ${tagged} tagged`;
     }
 
     function recordObservation(pixelX, pixelY, observationSource, localTimestampMs) {
       if (localTimestampMs === undefined) {
-        // Recorded-review flow (Phase 4/12): timestamp comes from the
-        // scrubbed video's own position, not the wall clock.
         const video = document.getElementById('playback-feed');
         localTimestampMs = Math.round(video.currentTime * 1000);
       }
@@ -888,7 +874,18 @@
       updateTagCounts();
     }
 
-    document.getElementById('playback-wrap').addEventListener('click', (e) => {
+    function advanceTagFrame() {
+      const video = document.getElementById('playback-feed');
+      const nextTime = video.currentTime + FRAME_STEP_SECONDS;
+      if (!isFinite(video.duration) || nextTime >= video.duration) {
+        enterUploadStep();
+      } else {
+        video.currentTime = nextTime;
+      }
+    }
+
+    document.getElementById('tag-video-wrap').addEventListener('click', (e) => {
+      if (trackingStarted) return;
       const video = document.getElementById('playback-feed');
       const rect = video.getBoundingClientRect();
       const scaleX = video.videoWidth / rect.width;
@@ -898,58 +895,102 @@
 
       recordObservation(pixelX, pixelY, 'manual');
       captureAnchor(pixelX, pixelY);
-      hideSuggestion();
 
       const marker = document.createElement('div');
       marker.className = 'obs-marker';
       marker.style.left = `${e.clientX - rect.left}px`;
       marker.style.top = `${e.clientY - rect.top}px`;
-      document.getElementById('playback-wrap').appendChild(marker);
+      document.getElementById('tag-video-wrap').appendChild(marker);
       setTimeout(() => marker.remove(), 600);
+
+      trackingStarted = true;
+      document.getElementById('tag-hint').style.display = 'none';
+      document.getElementById('skip-frame-btn').style.display = 'none';
+      runAutomaticTracking();
     });
 
+    // Pre-seed only: the rocket isn't visible yet, so just move ahead one
+    // frame and look again - there's nothing to track until the seed tap.
     document.getElementById('skip-frame-btn').addEventListener('click', () => {
       recordObservation(null, null);
-      anchorPatch = null;
-      hideSuggestion();
-      const video = document.getElementById('playback-feed');
-      video.currentTime = Math.min(video.duration || Infinity, video.currentTime + frameStepSeconds());
+      advanceTagFrame();
     });
 
-    document.getElementById('upload-observations-btn').addEventListener('click', async () => {
-      const statusEl = document.getElementById('upload-status');
+    // --- Step 5: Upload ---
+    async function enterUploadStep() {
+      showStep('upload');
+      const heading = document.getElementById('upload-heading');
+      const detail = document.getElementById('upload-detail');
+      const againBtn = document.getElementById('record-another-btn');
+      heading.textContent = 'Uploading…';
+      detail.textContent = '';
+      againBtn.style.display = 'none';
+
       if (!currentFlightNumber) {
-        statusEl.innerHTML = '<span class="error">No flight started yet - tap Refresh Flight.</span>';
+        heading.textContent = '⚠️ No flight to upload to';
+        detail.textContent = 'Ask the controller to start a flight, then try recording again.';
+        againBtn.style.display = 'block';
         return;
       }
+
       const cached = JSON.parse(localStorage.getItem(storageKey));
       const video = document.getElementById('playback-feed');
-      const res = await fetch('/api/optical/stations/observations/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          device_token: cached.device_token,
-          flight_number: currentFlightNumber,
-          image_width_px: video.videoWidth,
-          image_height_px: video.videoHeight,
-          observations: taggedObservations,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        statusEl.innerHTML = `<span class="error">${data.detail || 'Upload failed.'}</span>`;
-        return;
+      const trackedCount = taggedObservations.filter((o) => o.observation_source === 'automatic').length;
+      const skippedCount = taggedObservations.filter((o) => o.pixel_x == null).length;
+      try {
+        const res = await fetch('/api/optical/stations/observations/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_token: cached.device_token,
+            flight_number: currentFlightNumber,
+            image_width_px: video.videoWidth,
+            image_height_px: video.videoHeight,
+            observations: taggedObservations,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || 'Upload failed.');
+        heading.textContent = '✅ Uploaded!';
+        detail.textContent = `${data.frames} frames, ${data.pixels} tagged. ` +
+          `${trackedCount} tracked automatically, ${skippedCount} skipped (low confidence).`;
+      } catch (err) {
+        heading.textContent = '⚠️ Upload failed';
+        detail.textContent = err.message;
       }
-      statusEl.innerHTML =
-        `<span class="badge badge-green">Uploaded</span> ${data.frames} frames, ${data.pixels} tagged.`;
+
       taggedObservations = [];
       nextFrameIndex = 0;
       updateTagCounts();
+      againBtn.style.display = 'block';
+    }
+
+    document.getElementById('record-another-btn').addEventListener('click', () => {
+      const readyBtn = document.getElementById('report-ready-btn');
+      readyBtn.style.display = 'block';
+      readyBtn.disabled = false;
+      readyBtn.textContent = "👉 Click Here to Report Ready";
+      document.getElementById('stop-recording-btn').style.display = 'none';
+      document.getElementById('recording-indicator').classList.remove('visible');
+
+      // A camera could've been bumped between flights - require a fresh
+      // aim-lock before the station can report ready again. Camera/motion
+      // permission is already granted this page load, so the live view
+      // just moves back to the Aim step rather than re-showing that gate.
+      mustReaimBeforeNextFlight = true;
+      const liveView = document.getElementById('live-camera-view');
+      if (liveView) document.getElementById('aim-camera-slot').appendChild(liveView);
+      document.getElementById('aim-gate').style.display = 'none';
+      document.getElementById('lock-aim-btn').style.display = 'block';
+      showStep('aim');
     });
 
-    const cached = localStorage.getItem(storageKey);
-    if (cached) {
-      showStatus(JSON.parse(cached));
+    // --- Initial step on load ---
+    const cachedStation = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (cachedStation) {
+      showStep('aim');
+    } else {
+      showStep('position');
     }
   </script>
   {% endif %}

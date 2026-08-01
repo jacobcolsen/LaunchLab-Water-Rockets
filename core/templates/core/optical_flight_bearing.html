@@ -1,0 +1,198 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Direction View</title>
+  <link rel="stylesheet" href="{% static 'core/theme.css' %}">
+  <style>
+    body { max-width: 720px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+    .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
+    .top-bar h1 { margin: 0; font-size: 1.4rem; }
+    .card { margin-bottom: 1.5rem; }
+    .card h2 { margin: 0 0 0.5rem; font-size: 1rem; color: var(--text-muted); }
+    .explainer {
+      background: rgba(45, 212, 238, 0.1); border: 1px solid rgba(45, 212, 238, 0.3);
+      border-radius: 12px; padding: 0.85rem 1rem; margin-bottom: 1.5rem; font-size: 0.95rem;
+    }
+    canvas { width: 100%; border-radius: 12px; background: #05070d; margin-top: 0.5rem; }
+    #error-message { display: none; color: var(--accent-orange, #ff7a29); }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <h1 id="page-title">🧭 Direction View</h1>
+  </div>
+
+  <div class="explainer">
+    Only 1 camera tracked this flight, so we can't figure out exactly
+    <strong>where</strong> the rocket was in the sky - just <strong>which
+    way the camera was pointing</strong> at each moment. These charts show
+    that direction over time, not the actual flight path.
+  </div>
+
+  <p id="loading" class="hint">Loading…</p>
+  <p id="error-message"></p>
+
+  <div id="charts-container" style="display:none;">
+    <div class="card">
+      <h2>⬆️ How high did it look? (angle above the ground)</h2>
+      <canvas id="elevation-chart" width="640" height="240"></canvas>
+    </div>
+    <div class="card">
+      <h2>🧭 Which way was it pointing? (compass direction)</h2>
+      <canvas id="azimuth-chart" width="640" height="240"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const flightId = {{ flight_id }};
+
+    function drawChartAxes(ctx, { W, H, padding, minY, maxY, maxX, xLabel, yLabel }) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padding, H - padding);
+      ctx.lineTo(W - padding, H - padding);
+      ctx.moveTo(padding, padding);
+      ctx.lineTo(padding, H - padding);
+      ctx.stroke();
+
+      ctx.font = '11px sans-serif';
+      for (let f = 0; f <= 1.0001; f += 0.25) {
+        const x = padding + f * (W - padding * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.beginPath();
+        ctx.moveTo(x, padding);
+        ctx.lineTo(x, H - padding);
+        ctx.stroke();
+        ctx.fillStyle = '#93a0b8';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${(f * maxX).toFixed(1)}s`, x, H - padding + 16);
+
+        const y = H - padding - f * (H - padding * 2);
+        const value = minY + f * (maxY - minY);
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.beginPath();
+        ctx.moveTo(padding, y);
+        ctx.lineTo(W - padding, y);
+        ctx.stroke();
+        ctx.fillStyle = '#93a0b8';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${value.toFixed(0)}°`, padding - 8, y + 4);
+      }
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#c3cbd9';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(xLabel, padding + (W - padding * 2) / 2, H - 8);
+
+      ctx.save();
+      ctx.translate(14, padding + (H - padding * 2) / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(yLabel, 0, 0);
+      ctx.restore();
+
+      ctx.textAlign = 'left';
+    }
+
+    // Centered moving average, shrinking at the edges rather than padding -
+    // smooths out per-frame pixel-tap jitter for display, same idea as the
+    // trajectory smoothing in core/optical_trajectory.py's _moving_average.
+    function movingAverage(values, windowPoints) {
+      const half = Math.floor(windowPoints / 2);
+      return values.map((_, i) => {
+        const lo = Math.max(0, i - half);
+        const hi = Math.min(values.length, i + half + 1);
+        const slice = values.slice(lo, hi);
+        return slice.reduce((a, b) => a + b, 0) / slice.length;
+      });
+    }
+
+    // Backs the canvas with enough physical pixels for its actual on-
+    // screen size (times devicePixelRatio) instead of the small fixed
+    // width/height attribute - without this, the browser has to upscale a
+    // low-res bitmap to fill the CSS-stretched canvas, which is what was
+    // making the chart look blurry/pixelated.
+    function sizeCanvasForDisplay(canvas) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { ctx, W: rect.width, H: rect.height };
+    }
+
+    function drawSeriesChart(canvasId, series, valueKey, yLabel, color) {
+      const canvas = document.getElementById(canvasId);
+      const { ctx, W, H } = sizeCanvasForDisplay(canvas);
+      ctx.clearRect(0, 0, W, H);
+      if (!series || series.length === 0) return;
+
+      const t0 = series[0].timestamp_ms;
+      const rawValues = series.map((p) => p[valueKey]);
+      const smoothed = movingAverage(rawValues, 11);
+      const points = series.map((p, i) => ({ t: (p.timestamp_ms - t0) / 1000, v: smoothed[i] }));
+      const maxT = Math.max(...points.map((p) => p.t)) || 1;
+      const values = points.map((p) => p.v);
+      let minY = Math.min(...values);
+      let maxY = Math.max(...values);
+      if (valueKey === 'azimuth_deg') { minY = 0; maxY = 360; }
+      if (minY === maxY) { minY -= 1; maxY += 1; }
+      const padding = 44;
+      const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
+      const yAt = (v) => H - padding - ((v - minY) / (maxY - minY)) * (H - padding * 2);
+
+      drawChartAxes(ctx, { W, H, padding, minY, maxY, maxX: maxT, xLabel: 'Time (s)', yLabel });
+
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      points.forEach((p, i) => {
+        const x = xAt(p.t), y = yAt(p.v);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+
+    async function main() {
+      let data;
+      try {
+        const res = await fetch(`/api/optical/flights/${flightId}/bearings/`);
+        if (!res.ok) throw new Error(`${res.status}`);
+        data = await res.json();
+      } catch (err) {
+        document.getElementById('loading').style.display = 'none';
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = `Could not load direction data: ${err.message}`;
+        errEl.style.display = 'block';
+        return;
+      }
+
+      document.getElementById('page-title').textContent = `🧭 Direction View — Flight #${data.flight_number}`;
+      document.getElementById('loading').style.display = 'none';
+
+      const stations = data.stations || [];
+      if (stations.length === 0) {
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = 'No camera tracked this flight yet.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // Typically exactly one station in degraded mode; if more than one
+      // happens to have data, just show the first - this page is scoped
+      // to the "only 1 camera available" case.
+      const station = stations[0];
+      drawSeriesChart('elevation-chart', station.series, 'elevation_deg', 'Angle up (°)', '#2dd4ee');
+      drawSeriesChart('azimuth-chart', station.series, 'azimuth_deg', 'Compass (°)', '#fb923c');
+
+      document.getElementById('charts-container').style.display = 'block';
+    }
+
+    main();
+  </script>
+</body>
+</html>

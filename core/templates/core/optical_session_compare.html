@@ -1,0 +1,518 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Compare All Flights</title>
+  <link rel="stylesheet" href="{% static 'core/theme.css' %}">
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; }
+    .top-bar {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.85rem 1.25rem; background: rgba(20, 27, 45, 0.85);
+      border-bottom: 1px solid var(--border);
+    }
+    .top-bar h1 { margin: 0; font-size: 1.05rem; }
+    #reset-view-btn { position: absolute; top: 4.2rem; right: 1.25rem; z-index: 10; }
+    #loading, #error-message {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 10; color: var(--text-muted);
+    }
+    #error-message { display: none; color: var(--accent-orange, #ff7a29); max-width: 320px; text-align: center; }
+    canvas { display: block; }
+
+    #legend-panel {
+      position: absolute; top: 4.2rem; left: 1.25rem; z-index: 10;
+      background: rgba(20, 27, 45, 0.9); border: 1px solid var(--border);
+      border-radius: 14px; padding: 0.6rem 0.9rem; font-size: 0.85rem;
+      display: none;
+    }
+    #legend-panel .legend-row { display: flex; align-items: center; gap: 0.5rem; margin: 0.25rem 0; }
+    #legend-panel .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+
+    #hint { position: absolute; bottom: 14.5rem; left: 1.25rem; z-index: 10; font-size: 0.85rem; }
+
+    #leaderboard-panel {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+      max-height: 13rem; overflow-y: auto;
+      gap: 1rem; flex-wrap: wrap;
+      padding: 0.85rem 1.25rem; background: rgba(20, 27, 45, 0.92);
+      border-top: 1px solid var(--border); display: none;
+    }
+    .category-card {
+      flex: 1; min-width: 220px;
+      background: var(--surface-elevated); border-radius: 14px;
+      padding: 0.75rem 1rem;
+    }
+    .category-card .category-title {
+      font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase;
+      letter-spacing: 0.04em; margin-bottom: 0.4rem;
+    }
+    .category-card .winner-row { display: flex; align-items: center; gap: 0.5rem; }
+    .category-card .winner-row .flight-swatch {
+      width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0;
+    }
+    .category-card .winner-name { font-weight: 700; }
+    .category-card .winner-value { font-size: 1.5rem; font-weight: 700; margin-top: 0.1rem; }
+    .category-card .runner-up-list { margin-top: 0.5rem; font-size: 0.8rem; color: var(--text-muted); }
+    .category-card .runner-up-list div { display: flex; align-items: center; gap: 0.4rem; margin: 0.15rem 0; }
+    .category-card .runner-up-list .flight-swatch { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+    #bearing-chart-container {
+      display: none; position: absolute; top: 4.2rem; left: 1.25rem; right: 1.25rem; bottom: 14.5rem;
+      flex-direction: column;
+    }
+    #bearing-chart-container .explainer {
+      background: rgba(45, 212, 238, 0.1); border: 1px solid rgba(45, 212, 238, 0.3);
+      border-radius: 12px; padding: 0.6rem 0.9rem; font-size: 0.85rem; margin-bottom: 0.75rem; flex-shrink: 0;
+    }
+    #bearing-legend {
+      display: flex; flex-wrap: wrap; gap: 0.25rem 1.25rem; margin-bottom: 0.75rem;
+      font-size: 0.85rem; color: var(--text-muted); flex-shrink: 0;
+    }
+    #bearing-legend .legend-row { display: inline-flex; align-items: center; gap: 0.4rem; }
+    #bearing-legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+    #bearing-chart-container canvas { flex: 1; width: 100%; border-radius: 12px; background: #05070d; min-height: 0; }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <h1>📊 Compare All Flights</h1>
+  </div>
+  <button type="button" id="reset-view-btn" class="btn btn-secondary">Reset View</button>
+  <div id="legend-panel"></div>
+  <p id="hint" class="hint">Drag to orbit · Scroll or pinch to zoom</p>
+  <p id="loading">Loading flights…</p>
+  <p id="error-message"></p>
+
+  <div id="bearing-chart-container">
+    <div class="explainer">
+      Only 1 camera tracked these flights, so we can't show real 3D
+      positions - just the direction each camera pointed over time. Higher
+      on this chart means the rocket looked higher in the sky.
+    </div>
+    <div id="bearing-legend"></div>
+    <canvas id="bearing-chart-canvas" width="900" height="400"></canvas>
+  </div>
+
+  <div id="leaderboard-panel"></div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const sessionId = {{ session_id }};
+
+    const PALETTE = [0x2dd4ee, 0xfb923c, 0xe879f9, 0x34d399, 0xfbbf24, 0xa78bfa];
+
+    // This app's ENU convention (x=east, y=north, z=up) maps onto
+    // Three.js's default Y-up world as: three.x = east, three.y = up,
+    // three.z = -north. Applied everywhere a server (x,y,z) is converted.
+    function enuToThree(x_m, y_m, z_m) {
+      return new THREE.Vector3(x_m, z_m, -y_m);
+    }
+
+    function colorCss(hex) {
+      return `#${hex.toString(16).padStart(6, '0')}`;
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+      return res.json();
+    }
+
+    async function main() {
+      let flights, stations = [];
+      try {
+        flights = await fetchJson(`/api/optical/sessions/${sessionId}/flights/`);
+        stations = await fetchJson(`/api/optical/sessions/${sessionId}/stations/`);
+      } catch (err) {
+        document.getElementById('loading').style.display = 'none';
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = `Could not load session data: ${err.message}`;
+        errEl.style.display = 'block';
+        return;
+      }
+
+      if (flights.length === 0) {
+        document.getElementById('loading').style.display = 'none';
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = 'This session has no flights yet.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // Sensor-limited gating: with only 1 camera, no 3D position can be
+      // computed at all (see core/optical_rays.py) - render the
+      // direction-only comparison instead of an empty 3D scene.
+      if (stations.length === 1) {
+        await renderBearingComparison(flights);
+      } else {
+        await render3dComparison(flights, stations);
+      }
+      document.getElementById('loading').style.display = 'none';
+    }
+
+    function drawChartAxes2d(ctx, { W, H, padding, minY, maxY, maxX, xLabel, yLabel }) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padding, H - padding);
+      ctx.lineTo(W - padding, H - padding);
+      ctx.moveTo(padding, padding);
+      ctx.lineTo(padding, H - padding);
+      ctx.stroke();
+
+      ctx.font = '11px sans-serif';
+      for (let f = 0; f <= 1.0001; f += 0.25) {
+        const x = padding + f * (W - padding * 2);
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.beginPath();
+        ctx.moveTo(x, padding);
+        ctx.lineTo(x, H - padding);
+        ctx.stroke();
+        ctx.fillStyle = '#93a0b8';
+        ctx.textAlign = 'center';
+        ctx.fillText(`${(f * maxX).toFixed(1)}s`, x, H - padding + 16);
+
+        const y = H - padding - f * (H - padding * 2);
+        const value = minY + f * (maxY - minY);
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.beginPath();
+        ctx.moveTo(padding, y);
+        ctx.lineTo(W - padding, y);
+        ctx.stroke();
+        ctx.fillStyle = '#93a0b8';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${value.toFixed(0)}°`, padding - 8, y + 4);
+      }
+
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#c3cbd9';
+      ctx.font = '12px sans-serif';
+      ctx.fillText(xLabel, padding + (W - padding * 2) / 2, H - 8);
+
+      ctx.save();
+      ctx.translate(14, padding + (H - padding * 2) / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillText(yLabel, 0, 0);
+      ctx.restore();
+
+      ctx.textAlign = 'left';
+    }
+
+    // Backs the canvas with enough physical pixels for its actual on-
+    // screen size (times devicePixelRatio) instead of the small fixed
+    // width/height attribute - without this, the browser has to upscale a
+    // low-res bitmap to fill the CSS-stretched canvas, which is what was
+    // making the chart look blurry/pixelated. The container must already
+    // be visible (not display:none) when this runs, since it reads the
+    // canvas's actual rendered size.
+    function sizeCanvasForDisplay(canvas) {
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { ctx, W: rect.width, H: rect.height };
+    }
+
+    // Centered moving average, shrinking at the edges rather than padding -
+    // smooths out per-frame pixel-tap jitter for display, same idea as the
+    // trajectory smoothing in core/optical_trajectory.py's _moving_average.
+    function movingAverage(values, windowPoints) {
+      const half = Math.floor(windowPoints / 2);
+      return values.map((_, i) => {
+        const lo = Math.max(0, i - half);
+        const hi = Math.min(values.length, i + half + 1);
+        const slice = values.slice(lo, hi);
+        return slice.reduce((a, b) => a + b, 0) / slice.length;
+      });
+    }
+
+    async function renderBearingComparison(flights) {
+      // No 3D camera exists in this mode - hide the controls that assume one.
+      document.getElementById('reset-view-btn').style.display = 'none';
+      document.getElementById('hint').style.display = 'none';
+
+      const entries = [];
+      for (let i = 0; i < flights.length; i++) {
+        const flight = flights[i];
+        let bearingData;
+        try {
+          bearingData = await fetchJson(`/api/optical/flights/${flight.id}/bearings/`);
+        } catch (err) {
+          continue;
+        }
+        const station = (bearingData.stations || [])[0];
+        if (!station || station.series.length === 0) continue;
+        entries.push({ flight, series: station.series, color: PALETTE[i % PALETTE.length] });
+      }
+
+      if (entries.length === 0) {
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = 'None of this session\'s flights have direction data yet.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // --- Legend (inline, inside the chart container - keeps it from
+      // overlapping the explainer text above the chart) ---
+      const bearingLegend = document.getElementById('bearing-legend');
+      bearingLegend.innerHTML = entries.map((entry) => `
+        <span class="legend-row">
+          <span class="dot" style="background:${colorCss(entry.color)};"></span>
+          Flight #${entry.flight.number}${entry.flight.name ? ' — ' + entry.flight.name : ''}
+        </span>
+      `).join('');
+
+      // --- Chart: elevation vs. time, one line per flight ---
+      const canvas = document.getElementById('bearing-chart-canvas');
+      document.getElementById('bearing-chart-container').style.display = 'flex';
+      const { ctx, W, H } = sizeCanvasForDisplay(canvas);
+      ctx.clearRect(0, 0, W, H);
+
+      let maxT = 1, minY = 0, maxY = 1;
+      entries.forEach((entry) => {
+        const t0 = entry.series[0].timestamp_ms;
+        const rawPoints = entry.series.map((p) => ({ t: (p.timestamp_ms - t0) / 1000, v: p.elevation_deg }));
+        const smoothed = movingAverage(rawPoints.map((p) => p.v), 11);
+        entry._points = rawPoints.map((p, i) => ({ t: p.t, v: smoothed[i] }));
+        maxT = Math.max(maxT, ...entry._points.map((p) => p.t));
+        minY = Math.min(minY, ...entry._points.map((p) => p.v));
+        maxY = Math.max(maxY, ...entry._points.map((p) => p.v));
+      });
+      if (minY === maxY) { minY -= 1; maxY += 1; }
+
+      const padding = 50;
+      const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
+      const yAt = (v) => H - padding - ((v - minY) / (maxY - minY)) * (H - padding * 2);
+      drawChartAxes2d(ctx, { W, H, padding, minY, maxY, maxX: maxT, xLabel: 'Time (s)', yLabel: 'Angle up (°)' });
+
+      entries.forEach((entry) => {
+        ctx.strokeStyle = colorCss(entry.color);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        entry._points.forEach((p, i) => {
+          const x = xAt(p.t), y = yAt(p.v);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+      });
+
+      // --- Leaderboard: 2 categories computable from direction alone ---
+      const rows = entries.map((entry) => {
+        const values = entry._points.map((p) => p.v);
+        const times = entry._points.map((p) => p.t);
+        return {
+          number: entry.flight.number,
+          color: entry.color,
+          highest_angle_deg: Math.max(...values),
+          tracked_duration_s: Math.max(...times) - Math.min(...times),
+        };
+      });
+      const CATEGORIES = [
+        { key: 'highest_angle_deg', label: '⬆️ Highest Angle Reached', unit: '°' },
+        { key: 'tracked_duration_s', label: '⏱ Longest Tracked', unit: 's' },
+      ];
+      renderCategoryLeaderboard(rows, CATEGORIES);
+    }
+
+    function renderCategoryLeaderboard(rows, categories) {
+      const panel = document.getElementById('leaderboard-panel');
+      panel.innerHTML = categories.map((category) => {
+        const ranked = rows
+          .filter((row) => row[category.key] != null)
+          .sort((a, b) => b[category.key] - a[category.key]);
+        if (ranked.length === 0) {
+          return `
+            <div class="category-card">
+              <div class="category-title">${category.label}</div>
+              <div class="winner-value">—</div>
+            </div>
+          `;
+        }
+        const [winner, ...runnersUp] = ranked;
+        return `
+          <div class="category-card">
+            <div class="category-title">${category.label}</div>
+            <div class="winner-row">
+              <span class="flight-swatch" style="background:${colorCss(winner.color)};"></span>
+              <span class="winner-name">🏆 Flight #${winner.number}</span>
+            </div>
+            <div class="winner-value">${winner[category.key].toFixed(1)} ${category.unit}</div>
+            ${runnersUp.length > 0 ? `
+              <div class="runner-up-list">
+                ${runnersUp.map((row) => `
+                  <div>
+                    <span class="flight-swatch" style="background:${colorCss(row.color)};"></span>
+                    Flight #${row.number} — ${row[category.key].toFixed(1)} ${category.unit}
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('');
+      panel.style.display = 'flex';
+    }
+
+    async function render3dComparison(flights, stations) {
+      const entries = [];
+      for (let i = 0; i < flights.length; i++) {
+        const flight = flights[i];
+        let summary;
+        try {
+          summary = await fetchJson(`/api/optical/flights/${flight.id}/summary/`);
+        } catch (err) {
+          continue; // skip flights whose summary fails to load rather than failing the whole page
+        }
+        entries.push({
+          flight,
+          summary,
+          color: PALETTE[i % PALETTE.length],
+        });
+      }
+      document.getElementById('loading').style.display = 'none';
+
+      const withTrajectories = entries.filter((e) => (e.summary.trajectory || []).length > 0);
+      if (withTrajectories.length === 0) {
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = 'None of this session\'s flights have trajectory data yet.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      // --- Bounding box across every flight + the stations ---
+      let maxHorizontal = 30;
+      let maxHeight = 1;
+      withTrajectories.forEach((entry) => {
+        entry.summary.trajectory.forEach((p) => {
+          maxHorizontal = Math.max(maxHorizontal, Math.abs(p.filtered_x_m), Math.abs(p.filtered_y_m));
+          maxHeight = Math.max(maxHeight, p.filtered_z_m);
+        });
+      });
+      stations.forEach((s) => {
+        if (s.surveyed_x_m == null) return;
+        maxHorizontal = Math.max(maxHorizontal, Math.abs(s.surveyed_x_m), Math.abs(s.surveyed_y_m));
+      });
+      const groundSize = maxHorizontal * 2.6;
+
+      // --- Scene setup (same conventions as the single-flight 3D view) ---
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x05070d);
+
+      const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, groundSize * 20);
+      const defaultCameraPos = new THREE.Vector3(groundSize * 0.6, maxHeight * 1.3 + groundSize * 0.25, groundSize * 0.6);
+      camera.position.copy(defaultCameraPos);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.target.set(0, maxHeight * 0.3, 0);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.update();
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+      const sun = new THREE.DirectionalLight(0xffffff, 0.6);
+      sun.position.set(groundSize, groundSize, groundSize * 0.5);
+      scene.add(sun);
+
+      const grid = new THREE.GridHelper(groundSize, 24, 0x2dd4ee, 0x1c2540);
+      scene.add(grid);
+
+      const groundPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(groundSize, groundSize),
+        new THREE.MeshBasicMaterial({ color: 0x0a0f1c, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
+      );
+      groundPlane.rotation.x = -Math.PI / 2;
+      scene.add(groundPlane);
+
+      // One trajectory line per flight, each in its own color.
+      withTrajectories.forEach((entry) => {
+        const points = entry.summary.trajectory.map((p) => enuToThree(p.filtered_x_m, p.filtered_y_m, p.filtered_z_m));
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        const line = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: entry.color }));
+        scene.add(line);
+      });
+
+      // Station markers - shared ground stations, same across every flight.
+      stations.forEach((s) => {
+        if (s.surveyed_x_m == null) return;
+        const pos = enuToThree(s.surveyed_x_m, s.surveyed_y_m, s.surveyed_z_m || 0);
+        const marker = new THREE.Mesh(
+          new THREE.ConeGeometry(Math.max(groundSize * 0.01, 0.35), Math.max(groundSize * 0.025, 0.9), 12),
+          new THREE.MeshStandardMaterial({ color: 0xf5f7fa })
+        );
+        marker.position.copy(pos);
+        marker.position.y += Math.max(groundSize * 0.0125, 0.45);
+        scene.add(marker);
+      });
+
+      document.getElementById('reset-view-btn').addEventListener('click', () => {
+        camera.position.copy(defaultCameraPos);
+        controls.target.set(0, maxHeight * 0.3, 0);
+        controls.update();
+      });
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      // --- Legend ---
+      const legendPanel = document.getElementById('legend-panel');
+      legendPanel.innerHTML = withTrajectories.map((entry) => `
+        <div class="legend-row">
+          <span class="dot" style="background:${colorCss(entry.color)};"></span>
+          Flight #${entry.flight.number}${entry.flight.name ? ' — ' + entry.flight.name : ''}
+        </div>
+      `).join('');
+      legendPanel.style.display = 'block';
+
+      // --- Leaderboard: category winners ---
+      const leaderboardRows = withTrajectories.map((entry) => ({
+        number: entry.flight.number,
+        name: entry.flight.name,
+        color: entry.color,
+        apogee_height_m: entry.summary.stats?.apogee_height_m ?? null,
+        max_speed_m_s: entry.summary.stats?.max_speed_m_s ?? null,
+        flight_duration_s: entry.summary.stats?.flight_duration_s ?? null,
+      }));
+
+      const CATEGORIES = [
+        { key: 'apogee_height_m', label: '🚀 Highest Apogee', unit: 'm' },
+        { key: 'max_speed_m_s', label: '⚡ Fastest Speed', unit: 'm/s' },
+        { key: 'flight_duration_s', label: '⏱ Longest Flight Time', unit: 's' },
+      ];
+      renderCategoryLeaderboard(leaderboardRows, CATEGORIES);
+    }
+
+    main();
+  </script>
+</body>
+</html>

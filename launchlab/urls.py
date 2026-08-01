@@ -29,7 +29,9 @@ from core.api import (
     StationRecalibrateView,
 )
 from core.optical_api import (
+    TrackingFlightBearingView,
     TrackingFlightDebriefView,
+    TrackingFlightDeleteView,
     TrackingFlightListCreateView,
     TrackingFlightSummaryView,
     TrackingObservationUploadView,
@@ -39,12 +41,16 @@ from core.optical_api import (
     TrackingStationCalibrationView,
     TrackingFlightValidationView,
     TrackingStationClockSyncView,
+    TrackingStationDeleteView,
     TrackingStationListCreateView,
     TrackingStationPositionView,
     server_time_view,
 )
 from core.optical_views import (
     optical_control_view,
+    optical_flight_3d_view,
+    optical_flight_bearing_view,
+    optical_session_compare_view,
     optical_station_qr_view,
     optical_station_view,
 )
@@ -105,6 +111,21 @@ urlpatterns = [
         name='optical-station-qr',
     ),
     path(
+        'optical/flights/<int:flight_id>/3d',
+        optical_flight_3d_view,
+        name='optical-flight-3d',
+    ),
+    path(
+        'optical/sessions/<int:session_id>/compare',
+        optical_session_compare_view,
+        name='optical-session-compare',
+    ),
+    path(
+        'optical/flights/<int:flight_id>/direction',
+        optical_flight_bearing_view,
+        name='optical-flight-direction',
+    ),
+    path(
         'api/optical/sessions/',
         TrackingSessionCreateView.as_view(),
         name='api-optical-session-create',
@@ -128,6 +149,11 @@ urlpatterns = [
         'api/optical/stations/calibration/refine/',
         TrackingStationCalibrationRefineView.as_view(),
         name='api-optical-station-calibration-refine',
+    ),
+    path(
+        'api/optical/stations/<int:station_id>/',
+        TrackingStationDeleteView.as_view(),
+        name='api-optical-station-delete',
     ),
     path(
         'api/optical/sessions/<int:session_id>/flights/',
@@ -164,5 +190,15 @@ urlpatterns = [
         'api/optical/flights/<int:flight_id>/validate/',
         TrackingFlightValidationView.as_view(),
         name='api-optical-flight-validate',
+    ),
+    path(
+        'api/optical/flights/<int:flight_id>/bearings/',
+        TrackingFlightBearingView.as_view(),
+        name='api-optical-flight-bearings',
+    ),
+    path(
+        'api/optical/flights/<int:flight_id>/',
+        TrackingFlightDeleteView.as_view(),
+        name='api-optical-flight-delete',
     ),
 ]

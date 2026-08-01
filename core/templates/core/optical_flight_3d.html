@@ -1,0 +1,442 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flight 3D View</title>
+  <link rel="stylesheet" href="{% static 'core/theme.css' %}">
+  <style>
+    body { margin: 0; padding: 0; overflow: hidden; }
+    .top-bar {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 10;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0.85rem 1.25rem; background: rgba(20, 27, 45, 0.85);
+      border-bottom: 1px solid var(--border);
+    }
+    .top-bar h1 { margin: 0; font-size: 1.05rem; }
+    #reset-view-btn { position: absolute; top: 4.2rem; right: 1.25rem; z-index: 10; }
+    #hint { position: absolute; bottom: 4.75rem; left: 1.25rem; z-index: 10; font-size: 0.85rem; }
+    #loading, #error-message {
+      position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+      z-index: 10; color: var(--text-muted);
+    }
+    #error-message { display: none; color: var(--accent-orange, #ff7a29); max-width: 320px; text-align: center; }
+    canvas { display: block; }
+    .legend { position: absolute; top: 4.2rem; left: 1.25rem; z-index: 10; font-size: 0.8rem; color: var(--text-muted); }
+    .legend span { display: inline-flex; align-items: center; gap: 0.35rem; margin-right: 1rem; }
+    .legend .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+
+    #telemetry-panel {
+      position: absolute; top: 6.6rem; right: 1.25rem; z-index: 10;
+      background: rgba(20, 27, 45, 0.9); border: 1px solid var(--border);
+      border-radius: 14px; padding: 0.85rem 1.1rem; min-width: 190px;
+      display: none;
+    }
+    #telemetry-panel .telemetry-row { margin: 0.35rem 0; }
+    #telemetry-panel .telemetry-label { font-size: 0.8rem; color: var(--text-muted); display: block; }
+    #telemetry-panel .telemetry-value { font-size: 1.4rem; font-weight: 700; }
+    #telemetry-status { font-size: 1.1rem; font-weight: 700; color: var(--accent-cyan); margin-top: 0.5rem; }
+
+    #playback-bar {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+      display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;
+      padding: 0.85rem 1.25rem; background: rgba(20, 27, 45, 0.9);
+      border-top: 1px solid var(--border);
+    }
+    #scrub-bar { flex: 1; min-width: 140px; }
+    .speed-btn { padding: 0.35rem 0.6rem; font-size: 0.8rem; }
+    .speed-btn.active { background: var(--accent-cyan); color: #05070d; }
+
+    #event-banner {
+      position: absolute; top: 8rem; left: 50%; transform: translate(-50%, -12px);
+      z-index: 15; font-size: 1.6rem; font-weight: 700; color: var(--text-primary);
+      background: rgba(20, 27, 45, 0.92); border: 1px solid var(--accent-cyan);
+      padding: 0.6rem 1.25rem; border-radius: 14px; opacity: 0;
+      transition: opacity 0.3s ease, transform 0.3s ease; pointer-events: none;
+      white-space: nowrap;
+    }
+    #event-banner.visible { opacity: 1; transform: translate(-50%, 0); }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <h1 id="page-title">🌐 Flight 3D View</h1>
+  </div>
+  <button type="button" id="reset-view-btn" class="btn btn-secondary">Reset View</button>
+  <div class="legend">
+    <span><span class="dot" style="background:#2dd4ee;"></span>Trajectory</span>
+    <span><span class="dot" style="background:#fbbf24;"></span>Event</span>
+    <span><span class="dot" style="background:#f5f7fa;"></span>Station</span>
+  </div>
+  <p id="hint" class="hint">Drag to orbit (azimuth/elevation) · Scroll or pinch to zoom</p>
+  <p id="loading">Loading trajectory…</p>
+  <p id="error-message"></p>
+
+  <div id="telemetry-panel">
+    <div class="telemetry-row">
+      <span class="telemetry-label">⏱ Time</span>
+      <span class="telemetry-value" id="tel-time">0.0 s</span>
+    </div>
+    <div class="telemetry-row">
+      <span class="telemetry-label">📏 Height</span>
+      <span class="telemetry-value" id="tel-height">0.0 m</span>
+    </div>
+    <div class="telemetry-row">
+      <span class="telemetry-label">🏃 Speed</span>
+      <span class="telemetry-value" id="tel-speed">0.0 m/s</span>
+    </div>
+    <div class="telemetry-row">
+      <span class="telemetry-label">↔ Distance from pad</span>
+      <span class="telemetry-value" id="tel-distance">0.0 m</span>
+    </div>
+    <div id="telemetry-status">Ready</div>
+  </div>
+
+  <div id="event-banner"></div>
+
+  <div id="playback-bar" style="display:none;">
+    <button type="button" id="play-pause-btn" class="btn btn-primary">▶ Play</button>
+    <button type="button" id="replay-btn" class="btn btn-secondary">⟲ Replay</button>
+    <input type="range" id="scrub-bar" min="0" max="1000" value="0">
+    <button type="button" class="btn btn-secondary speed-btn" data-speed="0.5">0.5x</button>
+    <button type="button" class="btn btn-secondary speed-btn active" data-speed="1">1x</button>
+    <button type="button" class="btn btn-secondary speed-btn" data-speed="2">2x</button>
+    <button type="button" class="btn btn-secondary speed-btn" data-speed="4">4x</button>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+    const flightId = {{ flight_id }};
+    const sessionId = {{ session_id|default:"null" }};
+
+    const EVENT_COLORS = {
+      launch: 0x34d399,
+      burnout: 0xfb923c,
+      apogee: 0xfbbf24,
+      landing: 0xef4444,
+    };
+    const DEFAULT_EVENT_COLOR = 0xfbbf24;
+
+    // This app's ENU convention (x=east, y=north, z=up) maps onto
+    // Three.js's default Y-up world as: three.x = east, three.y = up,
+    // three.z = -north. Applied everywhere a server (x,y,z) is converted.
+    function enuToThree(x_m, y_m, z_m) {
+      return new THREE.Vector3(x_m, z_m, -y_m);
+    }
+
+    async function fetchJson(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`${url} -> ${res.status}`);
+      return res.json();
+    }
+
+    async function main() {
+      let summary, stations = [];
+      try {
+        summary = await fetchJson(`/api/optical/flights/${flightId}/summary/`);
+        if (sessionId) {
+          stations = await fetchJson(`/api/optical/sessions/${sessionId}/stations/`);
+        }
+      } catch (err) {
+        document.getElementById('loading').style.display = 'none';
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = `Could not load flight data: ${err.message}`;
+        errEl.style.display = 'block';
+        return;
+      }
+
+      const trajectory = summary.trajectory || [];
+      document.getElementById('page-title').textContent = `🌐 Flight #${summary.flight_number} — 3D View`;
+      document.getElementById('loading').style.display = 'none';
+
+      if (trajectory.length === 0) {
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = 'This flight has no trajectory data yet — record and upload observations first.';
+        errEl.style.display = 'block';
+        return;
+      }
+
+      const points = trajectory.map((p) => enuToThree(p.filtered_x_m, p.filtered_y_m, p.filtered_z_m));
+
+      // Bounding box (horizontal extent drives ground size + camera framing).
+      let maxHorizontal = 30; // sane floor so small flights don't feel cramped
+      let maxHeight = 1;
+      points.forEach((p) => {
+        maxHorizontal = Math.max(maxHorizontal, Math.abs(p.x), Math.abs(p.z));
+        maxHeight = Math.max(maxHeight, p.y);
+      });
+      stations.forEach((s) => {
+        if (s.surveyed_x_m == null) return;
+        maxHorizontal = Math.max(maxHorizontal, Math.abs(s.surveyed_x_m), Math.abs(s.surveyed_y_m));
+      });
+      const groundSize = maxHorizontal * 2.6;
+
+      // --- Scene setup ---
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x05070d);
+
+      const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, groundSize * 20);
+      const defaultCameraPos = new THREE.Vector3(groundSize * 0.6, maxHeight * 1.3 + groundSize * 0.25, groundSize * 0.6);
+      camera.position.copy(defaultCameraPos);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.target.set(0, maxHeight * 0.3, 0);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.08;
+      controls.update();
+
+      scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+      const sun = new THREE.DirectionalLight(0xffffff, 0.6);
+      sun.position.set(groundSize, groundSize, groundSize * 0.5);
+      scene.add(sun);
+
+      // Ground: grid + a subtle solid plane underneath it.
+      const grid = new THREE.GridHelper(groundSize, 24, 0x2dd4ee, 0x1c2540);
+      grid.position.y = 0;
+      scene.add(grid);
+
+      const groundPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(groundSize, groundSize),
+        new THREE.MeshBasicMaterial({ color: 0x0a0f1c, transparent: true, opacity: 0.6, side: THREE.DoubleSide })
+      );
+      groundPlane.rotation.x = -Math.PI / 2;
+      scene.add(groundPlane);
+
+      // Full trajectory line - dim, always visible as context for the animation.
+      const trajectoryGeometry = new THREE.BufferGeometry().setFromPoints(points);
+      const trajectoryLine = new THREE.Line(
+        trajectoryGeometry,
+        new THREE.LineBasicMaterial({ color: 0x2dd4ee, transparent: true, opacity: 0.28 })
+      );
+      scene.add(trajectoryLine);
+
+      // Bright "trail" line - reveals progressively as the point mass flies,
+      // showing where the rocket has already been.
+      const trailGeometry = new THREE.BufferGeometry().setFromPoints(points);
+      trailGeometry.setDrawRange(0, 1);
+      const trailLine = new THREE.Line(
+        trailGeometry,
+        new THREE.LineBasicMaterial({ color: 0x2dd4ee, linewidth: 3 })
+      );
+      scene.add(trailLine);
+
+      // Point mass - the rocket, simplified to a single glowing dot.
+      const pointMassRadius = Math.max(groundSize * 0.016, 0.5);
+      const pointMass = new THREE.Mesh(
+        new THREE.SphereGeometry(pointMassRadius, 20, 20),
+        new THREE.MeshStandardMaterial({ color: 0xff6b35, emissive: 0xff6b35, emissiveIntensity: 0.6 })
+      );
+      pointMass.position.copy(points[0]);
+      scene.add(pointMass);
+
+      // Flight event markers.
+      (summary.events || []).forEach((event) => {
+        const nearest = trajectory.reduce((best, p) =>
+          Math.abs(p.timestamp_ms - event.timestamp_ms) < Math.abs(best.timestamp_ms - event.timestamp_ms) ? p : best
+        );
+        const pos = enuToThree(nearest.filtered_x_m, nearest.filtered_y_m, nearest.filtered_z_m);
+        const color = EVENT_COLORS[event.event_type] ?? DEFAULT_EVENT_COLOR;
+        const marker = new THREE.Mesh(
+          new THREE.SphereGeometry(Math.max(groundSize * 0.012, 0.4), 16, 16),
+          new THREE.MeshStandardMaterial({ color })
+        );
+        marker.position.copy(pos);
+        scene.add(marker);
+      });
+
+      // Station markers.
+      stations.forEach((s) => {
+        if (s.surveyed_x_m == null) return;
+        const pos = enuToThree(s.surveyed_x_m, s.surveyed_y_m, s.surveyed_z_m || 0);
+        const marker = new THREE.Mesh(
+          new THREE.ConeGeometry(Math.max(groundSize * 0.01, 0.35), Math.max(groundSize * 0.025, 0.9), 12),
+          new THREE.MeshStandardMaterial({ color: 0xf5f7fa })
+        );
+        marker.position.copy(pos);
+        marker.position.y += Math.max(groundSize * 0.0125, 0.45);
+        scene.add(marker);
+      });
+
+      document.getElementById('reset-view-btn').addEventListener('click', () => {
+        camera.position.copy(defaultCameraPos);
+        controls.target.set(0, maxHeight * 0.3, 0);
+        controls.update();
+      });
+
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // --- Real-time point-mass playback + telemetry ---
+      const EVENT_LABELS = {
+        launch: '🚀 Liftoff!',
+        burnout: '🔥 Burnout',
+        apogee: '🪂 Apogee — the highest point!',
+        landing: '🎯 Touchdown!',
+      };
+
+      const startMs = trajectory[0].timestamp_ms;
+      const relTimesMs = trajectory.map((p) => p.timestamp_ms - startMs);
+      const totalDurationMs = relTimesMs[relTimesMs.length - 1];
+
+      // Speed per segment (meters/second) - simple finite difference between
+      // consecutive real trajectory points, in real ENU meters (the
+      // enu-to-three mapping is a pure permutation/sign-flip, so distances
+      // in three.js space are identical to the original meters).
+      const segmentSpeeds = [];
+      for (let i = 0; i < points.length - 1; i++) {
+        const dt_s = (relTimesMs[i + 1] - relTimesMs[i]) / 1000;
+        segmentSpeeds.push(dt_s > 0 ? points[i].distanceTo(points[i + 1]) / dt_s : 0);
+      }
+      segmentSpeeds.push(segmentSpeeds[segmentSpeeds.length - 1] || 0);
+
+      const events = (summary.events || []).map((e) => ({
+        relMs: e.timestamp_ms - startMs,
+        label: EVENT_LABELS[e.event_type] || `Event: ${e.event_type}`,
+      })).sort((a, b) => a.relMs - b.relMs);
+      let shownEventIndices = new Set();
+
+      function sampleAtElapsed(elapsedMs) {
+        const clamped = Math.max(0, Math.min(elapsedMs, totalDurationMs));
+        let i = 0;
+        while (i < relTimesMs.length - 2 && relTimesMs[i + 1] < clamped) i++;
+        const segStart = relTimesMs[i];
+        const segEnd = relTimesMs[i + 1];
+        const f = segEnd > segStart ? (clamped - segStart) / (segEnd - segStart) : 0;
+        const position = new THREE.Vector3().lerpVectors(points[i], points[i + 1], f);
+        const speed = segmentSpeeds[i];
+        const climbing = points[i + 1].y >= points[i].y;
+        return { position, speed, climbing, clamped, index: i };
+      }
+
+      let isPlaying = false;
+      let playbackSpeed = 1;
+      let elapsedMs = 0;
+      let lastWallTimeMs = null;
+      let eventBannerTimeout = null;
+
+      const telemetryPanel = document.getElementById('telemetry-panel');
+      const playbackBar = document.getElementById('playback-bar');
+      const playPauseBtn = document.getElementById('play-pause-btn');
+      const scrubBar = document.getElementById('scrub-bar');
+      const eventBanner = document.getElementById('event-banner');
+      telemetryPanel.style.display = 'block';
+      playbackBar.style.display = 'flex';
+
+      function showEventBanner(text) {
+        eventBanner.textContent = text;
+        eventBanner.classList.add('visible');
+        clearTimeout(eventBannerTimeout);
+        eventBannerTimeout = setTimeout(() => eventBanner.classList.remove('visible'), 2200);
+      }
+
+      function updateTelemetry() {
+        const { position, speed, climbing, clamped, index } = sampleAtElapsed(elapsedMs);
+
+        pointMass.position.copy(position);
+        trailGeometry.setDrawRange(0, index + 2);
+
+        document.getElementById('tel-time').textContent = `${(clamped / 1000).toFixed(1)} s`;
+        document.getElementById('tel-height').textContent = `${position.y.toFixed(1)} m`;
+        document.getElementById('tel-speed').textContent = `${speed.toFixed(1)} m/s`;
+        const distanceFromPad = Math.hypot(position.x, position.z);
+        document.getElementById('tel-distance').textContent = `${distanceFromPad.toFixed(1)} m`;
+
+        const statusEl = document.getElementById('telemetry-status');
+        if (clamped >= totalDurationMs) {
+          statusEl.textContent = 'Landed';
+        } else if (climbing) {
+          statusEl.textContent = 'Going up!';
+        } else {
+          statusEl.textContent = 'Coming down…';
+        }
+
+        scrubBar.value = Math.round((clamped / totalDurationMs) * 1000);
+
+        const nowShown = new Set();
+        events.forEach((event, idx) => {
+          if (event.relMs <= clamped) nowShown.add(idx);
+        });
+        nowShown.forEach((idx) => {
+          if (!shownEventIndices.has(idx)) showEventBanner(events[idx].label);
+        });
+        shownEventIndices = nowShown;
+
+        if (clamped >= totalDurationMs && isPlaying) {
+          isPlaying = false;
+          playPauseBtn.textContent = '▶ Play';
+        }
+      }
+
+      playPauseBtn.addEventListener('click', () => {
+        if (elapsedMs >= totalDurationMs) elapsedMs = 0; // replay from the end
+        isPlaying = !isPlaying;
+        lastWallTimeMs = null;
+        playPauseBtn.textContent = isPlaying ? '⏸ Pause' : '▶ Play';
+      });
+
+      document.getElementById('replay-btn').addEventListener('click', () => {
+        elapsedMs = 0;
+        shownEventIndices = new Set();
+        isPlaying = true;
+        lastWallTimeMs = null;
+        playPauseBtn.textContent = '⏸ Pause';
+        updateTelemetry();
+      });
+
+      scrubBar.addEventListener('input', () => {
+        isPlaying = false;
+        playPauseBtn.textContent = '▶ Play';
+        elapsedMs = (scrubBar.value / 1000) * totalDurationMs;
+        updateTelemetry();
+      });
+
+      document.querySelectorAll('.speed-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.speed-btn').forEach((b) => b.classList.remove('active'));
+          btn.classList.add('active');
+          playbackSpeed = parseFloat(btn.dataset.speed);
+        });
+      });
+
+      updateTelemetry();
+
+      function animate(nowMs) {
+        requestAnimationFrame(animate);
+        controls.update();
+
+        if (isPlaying) {
+          if (lastWallTimeMs != null) {
+            elapsedMs += (nowMs - lastWallTimeMs) * playbackSpeed;
+          }
+          lastWallTimeMs = nowMs;
+          updateTelemetry();
+        }
+
+        renderer.render(scene, camera);
+      }
+      requestAnimationFrame(animate);
+    }
+
+    main();
+  </script>
+</body>
+</html>

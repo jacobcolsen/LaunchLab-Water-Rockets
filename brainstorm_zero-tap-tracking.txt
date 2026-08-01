@@ -1,0 +1,128 @@
+ZERO-TAP TRACKING — BRAINSTORM (not a plan, nothing built yet)
+================================================================
+
+THE ASK
+--------
+No manual per-frame tagging at all. Rough idea floated: trust the
+assisted-tracking "guesser" (the existing block-matching algorithm from
+Phase 12), and when it's unsure, fall back to "the crosshair."
+
+First, a flag on that exact framing: "fall back to the crosshair" is
+safe ONLY if it means "treat this frame as no-data" (skip it) - not
+"report the crosshair's center pixel as if it were a real sighting."
+The second version would silently inject a fabricated data point
+labeled as real, which is the one thing this whole project has been
+careful never to do (no invented confidence scores, no pretending a
+guess is a measurement). The good news: this project's own philosophy
+already gives the safe way to do this - the `observation_source` field
+already distinguishes manual / assisted / automatic / simulated taps,
+so a new "unconfident automatic" case just needs to be honestly labeled
+as "no observation" rather than smuggled in as a real one.
+
+Below are three concrete ways to get to zero taps, roughly in order of
+how big a change each is.
+
+
+OPTION A - Fully automatic post-hoc video tracking
+----------------------------------------------------
+What: after recording stops, instead of a human tapping every frame,
+run the existing block-matching algorithm (grabFramePixels /
+extractPatch / findBestMatch - already built for Phase 12's "assisted"
+suggestions) automatically through every frame of the recorded video,
+re-anchoring frame-to-frame the way it already does live in Phase 13.
+
+Seed: one tap at liftoff to mark "there's the rocket" - or possibly
+even zero taps, since the station's own aim (facing/pitch) and the
+pad's known position could be used to compute an *expected* starting
+pixel automatically (reusing project_to_pixel, the same math the mock
+generator uses to fake camera footage) and seed from that instead.
+
+Confidence: the matcher already produces a match-quality score (sum of
+absolute pixel differences). Below some threshold, mark that frame
+"no observation" - same as today's manual Skip button, just automatic.
+
+Risk - this is the one that matters: block-matching can lock onto the
+wrong high-contrast thing (a cloud edge, a wire, a bird) and keep
+tracking it *confidently* - a wrong trajectory can look completely
+plausible on the chart afterward with nothing flagging it as wrong.
+Partial safety net that already exists: with 3 stations, if one
+station's tracker drifts onto the wrong object, the other two stations'
+rays will disagree, and the existing residual/quality metrics will show
+it as elevated error (though, per the already-documented finding,
+reliable *rejection* needs 4+ stations - at exactly 3 it just shows up
+as noise, not a clean catch). So automation isn't flying totally blind,
+but it isn't safely self-checking either.
+
+Effort: moderate. Reuses everything from Phase 12 almost as-is; mainly
+needs a "run this in a loop instead of on each tap" wrapper plus a
+confidence cutoff (untested - would need real footage to tune well).
+
+
+OPTION B - Live orientation tracking (no pixel processing at all)
+--------------------------------------------------------------------
+What: flip the whole model. Right now "Aim Camera" is a one-time
+calibration (lock in a fixed facing/pitch, then hold the phone still).
+Instead, the *kid keeps physically pointing the phone at the rocket for
+the whole flight*, like following a bird - the camera view is just a
+viewfinder to aim through, not something the app analyzes pixel by
+pixel. The already-built device-orientation listener (used today only
+for the one-time aim-lock) just keeps sampling facing/pitch continuously
+during recording, and that continuous bearing series *is* the data -
+converted to a 3D ray the same way a locked calibration is today.
+
+This is close to what Phase 13's "Live Track" prototype already explored
+(it got cut from the simplified wizard a few turns ago for being
+experimental) - this would promote that same idea from "experimental
+side feature" to "the primary method," and drop the pixel-matching part
+of it entirely in favor of pure sensor tracking.
+
+Upside: genuinely zero taps, ever - not even a seed tap. Also simpler
+overall - no camera FOV estimate needed, no pixel geometry, the whole
+"Lock In Aim" step goes away since aim is now continuous instead of a
+single locked value.
+
+Risk: accuracy now depends entirely on how well a kid can keep a small,
+fast, distant object centered in real time, especially right at
+liftoff when the rocket accelerates hardest - which could easily be
+*harder* than careful after-the-fact tapping, not easier. This exact
+concern is why Phase 13 was scoped as "unverified, feasibility unknown"
+in the first place - that question never got answered, just deferred.
+
+
+OPTION C - Hybrid: automatic pixel tracking, sensor bearing as fallback
+---------------------------------------------------------------------------
+What: run Option A's automatic tracker as the primary signal, but also
+log the phone's own orientation continuously in the background during
+recording (cheap - the sensor listener already exists, it would just
+also need to log to a buffer, not only drive the live compass readout).
+When the pixel-tracker's confidence drops, fall back to *that frame's
+logged orientation* as the bearing instead of either a fabricated pixel
+guess or a hard skip - two independently-sourced signals, each honestly
+labeled in observation_source (something like "automatic" vs a new
+"orientation_fallback"), rather than one silently blended number.
+
+This is probably the closest match to the original "if it's unsure, use
+the crosshairs" instinct - just landing on "use the sensor's own
+independent reading" rather than "assume dead-center," which keeps it
+an honest fallback signal instead of a fabricated one.
+
+Effort: the largest of the three, since it's really Option A plus
+Option B's sensor logging running at the same time - but it's also the
+one with the best shot at not silently going wrong, since a
+low-confidence pixel frame gets a real independent number instead of
+nothing or a guess.
+
+
+WHERE I'D START
+-----------------
+Option A is the smallest step from what already exists and immediately
+removes the tapping burden. I'd prototype that first against a couple
+of the recorded/simulated flights already sitting in the database,
+look at how often confidence actually drops and whether the drops
+correlate with real tracking loss, before deciding whether Option C's
+extra complexity (the sensor-fallback layer) is actually worth adding.
+
+Either way, this doesn't reduce the accuracy caveats from the earlier
+conversation (camera FOV is still a guess, compass drift is still
+compass drift, nothing's validated against a real flight yet) - it
+only removes the *tapping*, not the underlying measurement uncertainty.

@@ -91,6 +91,10 @@ class TrackingStation(models.Model):
     )
     clock_synced_at = models.DateTimeField(null=True, blank=True)
 
+    last_seen_at = models.DateTimeField(
+        null=True, blank=True, help_text="Live presence - touched by the WebSocket heartbeat, not a stored connected flag."
+    )
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -147,7 +151,12 @@ class TrackingFlight(models.Model):
 
     def save(self, *args, **kwargs):
         if self.number is None:
-            self.number = self.session.flights.count() + 1
+            # max()+1, not count()+1 - flights can now be deleted (the
+            # accidental-creation "undo"), which leaves gaps that a plain
+            # count would collide with (unique_together above would then
+            # raise an IntegrityError on the very next flight created).
+            max_number = self.session.flights.aggregate(models.Max("number"))["number__max"] or 0
+            self.number = max_number + 1
         super().save(*args, **kwargs)
 
     def __str__(self):

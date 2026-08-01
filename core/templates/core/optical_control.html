@@ -37,6 +37,125 @@
     }
     #summary-events-list { margin-top: 0.5rem; font-size: 0.9rem; padding: 0; }
     #summary-events-list li { padding: 0.3rem 0; border-bottom: 1px solid var(--border); list-style: none; }
+
+    .new-flight-btn {
+      display: block; width: 100%; margin: 0.85rem 0 1.1rem;
+      padding: 1.15rem 1.5rem; font-size: 1.35rem; font-weight: 800;
+      color: #05070d; border: none; border-radius: 999px; cursor: pointer;
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-orange));
+      box-shadow: 0 0 16px var(--accent-cyan-glow);
+      animation: newFlightPulse 2.2s ease-in-out infinite;
+      transition: transform 0.15s ease;
+    }
+    .new-flight-btn:hover { transform: scale(1.02); }
+    .new-flight-btn:active { transform: scale(0.97); }
+    .new-flight-btn:disabled { opacity: 0.55; cursor: default; animation: none; box-shadow: none; }
+    @keyframes newFlightPulse {
+      0%, 100% { box-shadow: 0 0 14px var(--accent-cyan-glow); }
+      50% { box-shadow: 0 0 30px var(--accent-orange-glow); }
+    }
+
+    #countdown-overlay {
+      display: none; position: fixed; inset: 0; z-index: 1000;
+      background: rgba(5, 7, 13, 0.95);
+      align-items: center; justify-content: center; flex-direction: column; text-align: center;
+    }
+    #countdown-overlay.visible { display: flex; }
+    #countdown-content .countdown-number {
+      font-size: 11rem; font-weight: 900; line-height: 1; color: var(--accent-cyan);
+      animation: countdownPop 0.3s ease-out;
+    }
+    #countdown-content .countdown-rocket {
+      font-size: 7rem; animation: rocketUp 0.5s ease-out;
+    }
+    #countdown-content .countdown-launch {
+      font-size: 7rem; font-weight: 900; color: var(--accent-orange);
+      animation: launchPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1); margin-top: 0.25rem;
+      text-shadow: 0 0 50px var(--accent-orange-glow);
+    }
+    #countdown-content .countdown-confirm {
+      font-size: 1.6rem; font-weight: 700; color: var(--text-primary);
+      animation: countdownPop 0.3s ease-out;
+    }
+    #launch-flash {
+      position: fixed; inset: 0; z-index: 1001; pointer-events: none;
+      background: var(--accent-orange); opacity: 0; display: none;
+    }
+    #launch-flash.flashing { display: block; animation: launchFlash 0.5s ease-out; }
+    @keyframes countdownPop {
+      0% { transform: scale(0.5); opacity: 1; }
+      15% { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    @keyframes launchPop {
+      0% { transform: scale(0.6); opacity: 1; }
+      40% { transform: scale(1.3); }
+      70% { transform: scale(0.95); }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    @keyframes rocketUp {
+      0% { transform: translateY(30px) scale(0.9); opacity: 1; }
+      100% { transform: translateY(-50px) scale(1.1); opacity: 1; }
+    }
+    @keyframes launchFlash {
+      0% { opacity: 0.85; }
+      100% { opacity: 0; }
+    }
+
+    .delete-flight-btn { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
+    .delete-flight-btn:hover { border-color: var(--accent-orange); color: var(--accent-orange); }
+    /* Must outrank every other overlay on this page (Prepare panel 999,
+       countdown 1000, launch flash 1001) - otherwise a delete triggered
+       from inside Prepare Flight opens correctly but renders hidden
+       underneath it, with nothing clickable. */
+    #delete-confirm-overlay { z-index: 1100; }
+    #delete-confirm-overlay .confirm-box { max-width: 380px; text-align: center; }
+    #delete-confirm-overlay .confirm-actions { display: flex; gap: 0.75rem; justify-content: center; margin-top: 1.25rem; }
+
+    #prepare-overlay {
+      display: none; position: fixed; inset: 0; z-index: 999;
+      background: rgba(5, 7, 13, 0.95); overflow-y: auto;
+      align-items: flex-start; justify-content: center; padding: 3rem 1.25rem;
+    }
+    #prepare-overlay.visible { display: flex; }
+    #prepare-panel {
+      max-width: 480px; width: 100%; background: var(--surface); border-radius: 16px;
+      padding: 1.5rem; border: 1px solid var(--border);
+    }
+    #prepare-panel h2 { margin: 0 0 0.25rem; font-size: 1.4rem; text-transform: none; letter-spacing: normal; }
+    #prepare-panel .hint { margin-bottom: 1.1rem; }
+    #flight-name-input { width: 100%; box-sizing: border-box; font-size: 1.05rem; padding: 0.7rem 0.9rem; }
+    #station-checklist { margin-top: 1.25rem; }
+    #station-checklist .checklist-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0.6rem 0; border-bottom: 1px solid var(--border);
+    }
+    #station-checklist .checklist-row:last-child { border-bottom: none; }
+    .prepare-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
+    .prepare-actions .btn { flex: 1; }
+    #begin-countdown-btn {
+      background: linear-gradient(135deg, var(--accent-cyan), var(--accent-orange)); color: #05070d; font-weight: 800;
+    }
+
+    #countdown-content .countdown-inprogress-label {
+      font-size: 1.5rem; font-weight: 700; color: var(--text-primary); margin-bottom: 2rem;
+    }
+    #countdown-content .big-touchdown-btn {
+      font-size: 3rem; font-weight: 900; padding: 1.5rem 3rem; border-radius: 999px;
+      background: linear-gradient(135deg, var(--accent-green), var(--accent-cyan)); color: #06281c; border: none; cursor: pointer;
+      box-shadow: 0 0 30px var(--accent-green-glow);
+      animation: touchdownBtnPulse 1.6s ease-in-out infinite;
+    }
+    @keyframes touchdownBtnPulse {
+      0%, 100% { box-shadow: 0 0 20px var(--accent-green-glow); transform: scale(1); }
+      50% { box-shadow: 0 0 45px var(--accent-green-glow); transform: scale(1.04); }
+    }
+    #countdown-content .countdown-touchdown {
+      font-size: 7rem; font-weight: 900; color: var(--accent-green);
+      animation: launchPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+      text-shadow: 0 0 50px var(--accent-green-glow);
+    }
+    #launch-flash.touchdown-flash { background: var(--accent-green); }
   </style>
 </head>
 <body>
@@ -68,8 +187,9 @@
     <div class="card">
       <div class="roster-head">
         <h2 style="margin:0;">Flights</h2>
-        <button type="button" id="new-flight-btn" class="btn btn-secondary">🚀 New Flight</button>
+        <a href="/optical/sessions/{{ session_id }}/compare" id="compare-flights-link" target="_blank" rel="noopener" class="btn btn-secondary">📊 Compare All Flights</a>
       </div>
+      <button type="button" id="new-flight-btn" class="new-flight-btn">🚀 START NEW FLIGHT!</button>
       <table>
         <thead>
           <tr><th>Flight</th><th></th></tr>
@@ -87,10 +207,10 @@
       </div>
       <table>
         <thead>
-          <tr><th>Station</th><th>Position Source</th><th>Coordinates</th><th>Calibration</th><th>Clock</th></tr>
+          <tr><th>Station</th><th>Position Source</th><th>Coordinates</th><th>Calibration</th><th>Clock</th><th>Connected</th><th></th></tr>
         </thead>
         <tbody id="roster-body">
-          <tr><td colspan="5">Loading…</td></tr>
+          <tr><td colspan="7">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -101,6 +221,36 @@
         <button type="button" id="export-btn" class="btn btn-secondary">⬇️ Export Session Data (JSON)</button>
       </div>
       <p class="hint" style="margin-top:0.5rem;">Downloads everything recorded for this session as one JSON file.</p>
+    </div>
+
+    <div id="launch-flash"></div>
+
+    <div id="prepare-overlay">
+      <div id="prepare-panel">
+        <h2>🛰️ Prepare Flight</h2>
+        <p class="hint">Name the flight and watch your stations check in - start the countdown whenever you're ready.</p>
+        <label for="flight-name-input" style="font-weight:700; font-size:0.9rem; color:var(--text-muted);">Flight name (optional)</label>
+        <input type="text" id="flight-name-input" placeholder="e.g. Big Blue Booster" style="margin-top:0.3rem;">
+        <div id="station-checklist"></div>
+        <div class="prepare-actions">
+          <button type="button" id="cancel-prepare-btn" class="btn btn-secondary">Cancel</button>
+          <button type="button" id="begin-countdown-btn" class="btn">▶ Begin Countdown</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="countdown-overlay">
+      <div id="countdown-content"></div>
+    </div>
+
+    <div id="delete-confirm-overlay" class="confirm-overlay">
+      <div class="confirm-box card">
+        <p id="delete-confirm-text" style="font-size:1.05rem;"></p>
+        <div class="confirm-actions">
+          <button type="button" id="delete-cancel-btn" class="btn btn-secondary">Cancel</button>
+          <button type="button" id="delete-confirm-btn" class="btn btn-danger">🗑️ Delete Flight</button>
+        </div>
+      </div>
     </div>
 
     <div id="summary-modal" class="confirm-overlay">
@@ -117,28 +267,30 @@
           <ul id="summary-events-list"></ul>
           <div class="summary-section-title">Quality</div>
           <p id="summary-quality-line" class="hint"></p>
-          <div class="summary-section-title">Validate Against Known Point</div>
-          <p class="hint" style="margin-top:0;">Compare this flight's computed position against one independently-measured reference point (e.g. a taped-measured pad crossbar height).</p>
-          <form id="validate-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:flex-end;">
-            <div>
-              <label class="hint" style="display:block;">Known X (m)</label>
-              <input type="number" step="any" id="validate-x" required style="width:90px;">
-            </div>
-            <div>
-              <label class="hint" style="display:block;">Known Y (m)</label>
-              <input type="number" step="any" id="validate-y" required style="width:90px;">
-            </div>
-            <div>
-              <label class="hint" style="display:block;">Known Z (m)</label>
-              <input type="number" step="any" id="validate-z" required style="width:90px;">
-            </div>
-            <div>
-              <label class="hint" style="display:block;">At timestamp (ms, optional)</label>
-              <input type="number" step="1" id="validate-timestamp" placeholder="defaults to apogee" style="width:150px;">
-            </div>
-            <button type="submit" class="btn btn-secondary">Validate</button>
-          </form>
-          <p id="validate-result" class="hint" style="margin-top:0.5rem;"></p>
+          <div id="validate-section">
+            <div class="summary-section-title">Validate Against Known Point</div>
+            <p class="hint" style="margin-top:0;">Compare this flight's computed position against one independently-measured reference point (e.g. a taped-measured pad crossbar height).</p>
+            <form id="validate-form" style="display:flex; gap:0.5rem; flex-wrap:wrap; align-items:flex-end;">
+              <div>
+                <label class="hint" style="display:block;">Known X (m)</label>
+                <input type="number" step="any" id="validate-x" required style="width:90px;">
+              </div>
+              <div>
+                <label class="hint" style="display:block;">Known Y (m)</label>
+                <input type="number" step="any" id="validate-y" required style="width:90px;">
+              </div>
+              <div>
+                <label class="hint" style="display:block;">Known Z (m)</label>
+                <input type="number" step="any" id="validate-z" required style="width:90px;">
+              </div>
+              <div>
+                <label class="hint" style="display:block;">At timestamp (ms, optional)</label>
+                <input type="number" step="1" id="validate-timestamp" placeholder="defaults to apogee" style="width:150px;">
+              </div>
+              <button type="submit" class="btn btn-secondary">Validate</button>
+            </form>
+            <p id="validate-result" class="hint" style="margin-top:0.5rem;"></p>
+          </div>
           <div id="summary-limitations" class="summary-limitations" style="display:none;"></div>
         </div>
       </div>
@@ -171,6 +323,22 @@
         `${window.location.origin}/optical/station?session=${sessionId}`;
       document.getElementById('qr-code').src = `/optical/sessions/${sessionId}/qr.png`;
 
+      // Pushes the whole New Flight ceremony (prepare -> station check-in ->
+      // countdown -> touchdown) live to every connected station's phone, in
+      // sync - each client runs its own identical local timer/UI off these
+      // "go" signals, same pattern as the clinometer's ws/sessions/
+      // countdown_start (core/consumers.py).
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+      const countdownSocket = new WebSocket(`${wsProtocol}://${window.location.host}/ws/optical/sessions/${sessionId}/`);
+      const readyStationIds = new Set();
+      countdownSocket.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        if (message.type === 'station_ready' && message.station_id != null) {
+          readyStationIds.add(message.station_id);
+          renderStationChecklist();
+        }
+      };
+
       const sourceBadge = {
         gps: ['badge-green', '📍 GPS'],
         manual: ['badge-cyan', '✏️ Manual'],
@@ -199,7 +367,7 @@
       function renderRoster(stations) {
         const body = document.getElementById('roster-body');
         if (stations.length === 0) {
-          body.innerHTML = '<tr><td colspan="5">No stations yet.</td></tr>';
+          body.innerHTML = '<tr><td colspan="7">No stations yet.</td></tr>';
           return;
         }
         body.innerHTML = stations.map((s) => {
@@ -212,19 +380,30 @@
               <td>${formatCoordinates(s)}</td>
               <td>${readinessBadge(hasCalibration, 'Set', 'Not set')}</td>
               <td>${readinessBadge(s.clock_synced_at != null, 'Synced', 'Not synced')}</td>
+              <td>${s.connected
+                ? '<span class="badge badge-green">🟢 Connected</span>'
+                : '<span class="badge badge-muted">🔌 Disconnected</span>'}</td>
+              <td><button type="button" class="btn delete-station-btn" data-station-id="${s.id}" data-station-label="${escapeHtml(s.label)}">🗑️</button></td>
             </tr>
           `;
         }).join('');
+        document.querySelectorAll('.delete-station-btn').forEach((btn) => {
+          btn.addEventListener('click', () => confirmDeleteStation(btn.dataset.stationId, btn.dataset.stationLabel));
+        });
       }
+
+      let stationCount = 0;
+      let stationRoster = [];
 
       async function loadRoster() {
         const res = await fetch(`/api/optical/sessions/${sessionId}/stations/`);
         const stations = await res.json();
+        stationCount = stations.length;
+        stationRoster = stations;
         renderRoster(stations);
       }
 
       document.getElementById('refresh-btn').addEventListener('click', loadRoster);
-      loadRoster();
       setInterval(loadRoster, 5000);
 
       function renderFlightsTable(flights) {
@@ -233,16 +412,72 @@
           body.innerHTML = '<tr><td colspan="2">No flights yet - tap New Flight before the first launch attempt.</td></tr>';
           return;
         }
+        // Sensor-limited gating: with only 1 camera, no 3D position can be
+        // computed at all (see core/optical_rays.py), so send the operator
+        // to the direction-only view instead of a dead-end 3D page.
+        const secondButton = (f) => stationCount === 1
+          ? `<a href="/optical/flights/${f.id}/direction?session=${sessionId}" target="_blank" rel="noopener" class="btn btn-secondary">🧭 Direction View</a>`
+          : `<a href="/optical/flights/${f.id}/3d?session=${sessionId}" target="_blank" rel="noopener" class="btn btn-secondary">🌐 3D View</a>`;
         body.innerHTML = flights.map((f) => `
           <tr>
-            <td>Flight #${f.number}</td>
-            <td><button type="button" class="btn btn-secondary summary-btn" data-flight-id="${f.id}" data-flight-number="${f.number}">📊 Summary</button></td>
+            <td>Flight #${f.number}${f.name ? ` — ${escapeHtml(f.name)}` : ''}</td>
+            <td>
+              <button type="button" class="btn btn-secondary summary-btn" data-flight-id="${f.id}" data-flight-number="${f.number}">📊 Summary</button>
+              ${secondButton(f)}
+              <button type="button" class="btn delete-flight-btn" data-flight-id="${f.id}" data-flight-number="${f.number}">🗑️</button>
+            </td>
           </tr>
         `).join('');
         document.querySelectorAll('.summary-btn').forEach((btn) => {
           btn.addEventListener('click', () => openFlightSummary(btn.dataset.flightId, btn.dataset.flightNumber));
         });
+        document.querySelectorAll('.delete-flight-btn').forEach((btn) => {
+          btn.addEventListener('click', () => confirmDeleteFlight(btn.dataset.flightId, btn.dataset.flightNumber));
+        });
       }
+
+      // --- Delete flight/station (with confirmation - both get created by accident sometimes) ---
+      let pendingDeleteKind = null; // 'flight' | 'station'
+      let pendingDeleteId = null;
+
+      function confirmDeleteFlight(flightId, flightNumber) {
+        pendingDeleteKind = 'flight';
+        pendingDeleteId = flightId;
+        document.getElementById('delete-confirm-text').textContent =
+          `Delete Flight #${flightNumber}? This can't be undone.`;
+        document.getElementById('delete-confirm-btn').textContent = '🗑️ Delete Flight';
+        document.getElementById('delete-confirm-overlay').style.display = 'flex';
+      }
+
+      function confirmDeleteStation(stationId, stationLabel) {
+        pendingDeleteKind = 'station';
+        pendingDeleteId = stationId;
+        document.getElementById('delete-confirm-text').textContent =
+          `Delete station "${stationLabel}"? This can't be undone.`;
+        document.getElementById('delete-confirm-btn').textContent = '🗑️ Delete Station';
+        document.getElementById('delete-confirm-overlay').style.display = 'flex';
+      }
+
+      document.getElementById('delete-cancel-btn').addEventListener('click', () => {
+        pendingDeleteKind = null;
+        pendingDeleteId = null;
+        document.getElementById('delete-confirm-overlay').style.display = 'none';
+      });
+
+      document.getElementById('delete-confirm-btn').addEventListener('click', async () => {
+        if (pendingDeleteId == null) return;
+        if (pendingDeleteKind === 'flight') {
+          await fetch(`/api/optical/flights/${pendingDeleteId}/`, { method: 'DELETE' });
+          loadFlights();
+        } else if (pendingDeleteKind === 'station') {
+          await fetch(`/api/optical/stations/${pendingDeleteId}/`, { method: 'DELETE' });
+          await loadRoster();
+          renderStationChecklist(); // reflect the removal immediately if Prepare Flight is open
+        }
+        pendingDeleteKind = null;
+        pendingDeleteId = null;
+        document.getElementById('delete-confirm-overlay').style.display = 'none';
+      });
 
       async function loadFlights() {
         const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
@@ -250,16 +485,166 @@
         renderFlightsTable(flights);
       }
 
-      document.getElementById('new-flight-btn').addEventListener('click', async () => {
-        await fetch(`/api/optical/sessions/${sessionId}/flights/`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
+      // --- New Flight countdown ceremony ---
+      let audioCtx = null;
+      function playBeep(frequency, durationMs, volume = 0.18) {
+        try {
+          audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+          const oscillator = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          oscillator.type = 'sine';
+          oscillator.frequency.value = frequency;
+          gain.gain.value = volume;
+          oscillator.connect(gain);
+          gain.connect(audioCtx.destination);
+          oscillator.start();
+          gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + durationMs / 1000);
+          oscillator.stop(audioCtx.currentTime + durationMs / 1000);
+        } catch (err) {
+          // Web Audio unavailable/blocked - the visual countdown still works fine without sound.
+        }
+      }
+
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+      }
+
+      // --- Prepare panel: name the flight, watch stations check in ---
+      function renderStationChecklist() {
+        const el = document.getElementById('station-checklist');
+        if (stationRoster.length === 0) {
+          el.innerHTML = '<p class="hint">No stations joined yet.</p>';
+          return;
+        }
+        el.innerHTML = stationRoster.map((s) => {
+          const isReady = readyStationIds.has(s.id);
+          return `
+            <div class="checklist-row">
+              <span>${escapeHtml(s.label)}</span>
+              <span style="display:flex; align-items:center; gap:0.5rem;">
+                ${isReady
+                  ? '<span class="badge badge-green">✅ Ready</span>'
+                  : '<span class="badge badge-muted">⏳ Waiting…</span>'}
+                <button type="button" class="btn delete-station-btn" data-station-id="${s.id}" data-station-label="${escapeHtml(s.label)}" style="margin:0; padding:0.3rem 0.5rem;">🗑️</button>
+              </span>
+            </div>
+          `;
+        }).join('');
+        el.querySelectorAll('.delete-station-btn').forEach((btn) => {
+          btn.addEventListener('click', () => confirmDeleteStation(btn.dataset.stationId, btn.dataset.stationLabel));
         });
-        loadFlights();
+      }
+
+      function openPreparePanel() {
+        // Deliberately does NOT clear readyStationIds - a station can
+        // report ready any time after reaching its Record step, not just
+        // while this panel happens to be open, so a station that already
+        // reported ready earlier should still show ready here. The set
+        // only resets once a flight's countdown actually begins (below) -
+        // that's the real "this round is consumed" moment.
+        document.getElementById('flight-name-input').value = '';
+        renderStationChecklist();
+        document.getElementById('prepare-overlay').classList.add('visible');
+      }
+
+      document.getElementById('new-flight-btn').addEventListener('click', openPreparePanel);
+
+      document.getElementById('cancel-prepare-btn').addEventListener('click', () => {
+        document.getElementById('prepare-overlay').classList.remove('visible');
       });
 
-      loadFlights();
+      document.getElementById('begin-countdown-btn').addEventListener('click', () => {
+        const flightName = document.getElementById('flight-name-input').value.trim();
+        document.getElementById('prepare-overlay').classList.remove('visible');
+        runNewFlightCountdown(flightName);
+      });
+
+      async function runNewFlightCountdown(flightName) {
+        const btn = document.getElementById('new-flight-btn');
+        const overlay = document.getElementById('countdown-overlay');
+        const content = document.getElementById('countdown-content');
+        const flash = document.getElementById('launch-flash');
+        btn.disabled = true;
+        overlay.classList.add('visible');
+
+        // This flight's countdown is starting - any "ready" reports from
+        // here on are for the *next* flight, so reset the checklist now.
+        readyStationIds.clear();
+
+        // One "go" signal - every connected station mirrors this same
+        // 5-4-3-2-1-LAUNCH sequence locally and in sync, no per-tick
+        // network round-trips (see core/optical_consumers.py).
+        if (countdownSocket.readyState === WebSocket.OPEN) {
+          countdownSocket.send(JSON.stringify({ type: 'countdown_start' }));
+        }
+
+        for (let n = 5; n >= 1; n--) {
+          content.innerHTML = `<div class="countdown-number">${n}</div>`;
+          playBeep(440, 150);
+          await sleep(1000);
+        }
+
+        content.innerHTML = `
+          <div class="countdown-rocket">🚀</div>
+          <div class="countdown-launch">LAUNCH!</div>
+        `;
+        flash.classList.add('flashing');
+        playBeep(880, 600);
+        setTimeout(() => flash.classList.remove('flashing'), 500);
+
+        let flightNumber = null;
+        try {
+          const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(flightName ? { name: flightName } : {}),
+          });
+          const flight = await res.json();
+          flightNumber = flight.number;
+        } catch (err) {
+          // Fall through - only shown if creation actually failed, below.
+        }
+
+        if (flightNumber == null) {
+          content.innerHTML = `<div class="countdown-confirm">⚠️ Something went wrong - try again.</div>`;
+          await sleep(1500);
+          overlay.classList.remove('visible');
+          btn.disabled = false;
+          loadFlights();
+          return;
+        }
+
+        // Just hold the LAUNCH moment itself, longer - no separate "ready" screen.
+        await sleep(3000);
+
+        // The overlay stays up and blocking - the only thing to do until
+        // the flight is over is press this one big Touchdown button.
+        content.innerHTML = `
+          <div class="countdown-inprogress-label">🚀 Flight #${flightNumber}${flightName ? ` "${flightName}"` : ''} in progress</div>
+          <button type="button" id="touchdown-btn" class="big-touchdown-btn">🎯 TOUCHDOWN</button>
+        `;
+        document.getElementById('touchdown-btn').addEventListener('click', async () => {
+          if (countdownSocket.readyState === WebSocket.OPEN) {
+            countdownSocket.send(JSON.stringify({ type: 'flight_landed' }));
+          }
+          content.innerHTML = `
+            <div class="countdown-rocket">🎯</div>
+            <div class="countdown-touchdown">TOUCHDOWN!</div>
+          `;
+          flash.classList.add('flashing', 'touchdown-flash');
+          playBeep(660, 500);
+          setTimeout(() => flash.classList.remove('flashing', 'touchdown-flash'), 500);
+          await sleep(2500);
+
+          overlay.classList.remove('visible');
+          btn.disabled = false;
+          loadFlights();
+        });
+      }
+
+      // Roster must load first so stationCount is known before the
+      // Flights table renders its (station-count-gated) action buttons.
+      loadRoster().then(loadFlights);
 
       // --- Flight Summary (Phase 14) ---
       function formatStat(value, unit, decimals = 1) {
@@ -316,10 +701,25 @@
         ctx.textAlign = 'left';
       }
 
+      // Backs the canvas with enough physical pixels for its actual on-
+      // screen size (times devicePixelRatio) instead of the small fixed
+      // width/height attribute - without this, the browser has to upscale
+      // a low-res bitmap to fill the CSS-stretched canvas, making the
+      // chart look blurry/pixelated. The canvas must already be visible
+      // (not display:none) when this runs.
+      function sizeCanvasForDisplay(canvas) {
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width = Math.round(rect.width * dpr);
+        canvas.height = Math.round(rect.height * dpr);
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        return { ctx, W: rect.width, H: rect.height };
+      }
+
       function drawHeightChart(trajectory) {
         const canvas = document.getElementById('summary-chart-canvas');
-        const ctx = canvas.getContext('2d');
-        const W = canvas.width, H = canvas.height;
+        const { ctx, W, H } = sizeCanvasForDisplay(canvas);
         ctx.clearRect(0, 0, W, H);
         if (!trajectory || trajectory.length === 0) return;
 
@@ -353,6 +753,10 @@
         currentValidateFlightId = flightId;
         document.getElementById('validate-form').reset();
         document.getElementById('validate-result').textContent = '';
+        // Nothing to validate against without a computed 3D position -
+        // hide the form rather than let it lead to a "no trajectory data" dead end.
+        document.getElementById('validate-section').style.display =
+          (summary.trajectory || []).length === 0 ? 'none' : 'block';
 
         const stats = summary.stats || {};
         const landing = stats.landing_estimate || {};
@@ -367,6 +771,9 @@
           <div><span class="stat-label">Landing Distance</span><span class="stat-value">${formatStat(landing.distance_m, ' m')}</span></div>
         `;
 
+        // Show the modal before measuring the canvas for the height
+        // chart - sizeCanvasForDisplay needs its real, laid-out size.
+        document.getElementById('summary-modal').style.display = 'flex';
         drawHeightChart(summary.trajectory || []);
 
         const events = summary.events || [];
@@ -389,8 +796,6 @@
         } else {
           limitationsEl.style.display = 'none';
         }
-
-        document.getElementById('summary-modal').style.display = 'flex';
       }
 
       document.getElementById('summary-close-btn').addEventListener('click', () => {

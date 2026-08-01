@@ -6,6 +6,7 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .optical_bearing import compute_bearing_series_for_flight
 from .optical_camera import solve_boresight_from_tap
 from .optical_debrief import compute_derived_flight_data
 from .optical_events import detect_flight_events
@@ -205,6 +206,36 @@ class TrackingFlightListCreateView(generics.ListCreateAPIView):
         serializer.save(session=session)
 
 
+class TrackingFlightDeleteView(APIView):
+    """Deletes a flight and everything derived from it - every
+    flight-related model already uses on_delete=CASCADE, so this is a
+    complete cleanup with no custom logic needed. Flights get created by
+    accident sometimes; this is the undo."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def delete(self, request, flight_id):
+        flight = get_object_or_404(TrackingFlight, pk=flight_id)
+        flight.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class TrackingStationDeleteView(APIView):
+    """Deletes a station that's no longer in use, and everything derived
+    from it - StationCalibration and FrameObservation (and its
+    PixelObservations) already use on_delete=CASCADE, so this is a
+    complete cleanup with no custom logic needed."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def delete(self, request, station_id):
+        station = get_object_or_404(TrackingStation, pk=station_id)
+        station.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class TrackingObservationUploadView(APIView):
     """Batch upload of manually-tagged pixel observations for one flight.
     The video itself never leaves the phone - only the tapped pixels and
@@ -357,6 +388,19 @@ class TrackingSessionExportView(APIView):
     def get(self, request, session_id):
         session = get_object_or_404(TrackingSession, pk=session_id)
         return Response(export_tracking_session(session))
+
+
+class TrackingFlightBearingView(APIView):
+    """Read-only direction-over-time view for a flight - which way each
+    tracking camera was actually pointed, for use when too few cameras
+    were tracking to triangulate a real 3D position."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, flight_id):
+        flight = get_object_or_404(TrackingFlight, pk=flight_id)
+        return Response(compute_bearing_series_for_flight(flight))
 
 
 class TrackingFlightValidationView(APIView):
