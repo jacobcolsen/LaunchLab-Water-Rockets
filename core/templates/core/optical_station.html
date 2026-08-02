@@ -63,17 +63,16 @@
     #camera-feed, #playback-feed {
       width: 100%; height: 100%; object-fit: cover; display: block;
     }
-    #camera-crosshair, #tag-crosshair {
+    #camera-crosshair {
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       width: 44px; height: 44px; pointer-events: none;
     }
-    #camera-crosshair::before, #camera-crosshair::after,
-    #tag-crosshair::before, #tag-crosshair::after {
+    #camera-crosshair::before, #camera-crosshair::after {
       content: ""; position: absolute; background: var(--accent-cyan);
       box-shadow: 0 0 6px var(--accent-cyan-glow);
     }
-    #camera-crosshair::before, #tag-crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
-    #camera-crosshair::after, #tag-crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
+    #camera-crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
+    #camera-crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
     #live-orientation, #flight-pill, #tag-progress-pill {
       position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 5;
       background: rgba(11,15,26,0.7); padding: 0.35rem 0.9rem; border-radius: 999px;
@@ -98,7 +97,7 @@
       position: absolute; width: 20px; height: 20px; border: 2px solid var(--accent-green);
       border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
     }
-    #tag-hint {
+    #record-hint {
       position: absolute; top: 3.75rem; left: 50%; transform: translateX(-50%); z-index: 5;
       max-width: 280px; margin: 0; text-align: center; text-shadow: 0 1px 4px rgba(0,0,0,0.8);
     }
@@ -264,6 +263,7 @@
       <button type="button" id="back-to-aim-btn" class="icon-btn back-icon">‹</button>
       <div id="flight-pill">Flight: waiting…</div>
       <div id="recording-indicator">⏺ Recording…</div>
+      <p class="hint" id="record-hint">Tap the rocket on the pad to mark it, then report ready.</p>
       <div id="record-camera-slot"></div>
       <button type="button" id="report-ready-btn" disabled>👉 Click Here to Report Ready</button>
       <button type="button" id="stop-recording-btn" style="display:none;">⏹ Stop Recording</button>
@@ -272,14 +272,11 @@
     <!-- Step 4: Tag the Rocket -->
     <div id="step-tag" class="step">
       <button type="button" id="back-to-record-btn" class="icon-btn back-icon">‹</button>
-      <div id="tag-progress-pill">0 tagged</div>
-      <p class="hint" id="tag-hint">Tap the rocket to start tracking - then just watch, we'll take it from here!</p>
+      <div id="tag-progress-pill">🤖 Tracking automatically…</div>
       <div id="tag-video-wrap">
         <video id="playback-feed" playsinline muted></video>
-        <div id="tag-crosshair"></div>
       </div>
       <canvas id="tracking-canvas" style="display:none;"></canvas>
-      <button type="button" id="skip-frame-btn" class="icon-btn skip-icon">⏭️</button>
     </div>
 
     <!-- Step 5: Upload -->
@@ -651,7 +648,9 @@
       const liveView = document.getElementById('live-camera-view');
       if (liveView) document.getElementById('record-camera-slot').appendChild(liveView);
       document.getElementById('lock-aim-btn').style.display = 'none';
-      document.getElementById('report-ready-btn').disabled = false;
+      // Report Ready stays disabled until the rocket is tapped on the pad
+      // (see the record-camera-slot click listener above) - that tap is
+      // what seeds the automatic tracker later, so it's required, not optional.
       refreshCurrentFlight();
       if (!flightPollIntervalId) {
         flightPollIntervalId = setInterval(refreshCurrentFlight, 3000);
@@ -694,7 +693,33 @@
     let nextFrameIndex = 0;
     let currentFlightNumber = null;
     let flightPollIntervalId = null;
+    let seedPixelX = null;
+    let seedPixelY = null;
     const FRAME_STEP_SECONDS = 1 / 30;
+
+    // Tap the rocket on the pad while it's stationary - this is what
+    // unlocks Report Ready, and its coordinates seed the automatic tracker
+    // once the flight is recorded, so nobody has to tap anything after.
+    document.getElementById('record-camera-slot').addEventListener('click', (e) => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') return;
+      const video = document.getElementById('camera-feed');
+      if (!video) return;
+      const rect = video.getBoundingClientRect();
+      const scaleX = video.videoWidth / rect.width;
+      const scaleY = video.videoHeight / rect.height;
+      seedPixelX = (e.clientX - rect.left) * scaleX;
+      seedPixelY = (e.clientY - rect.top) * scaleY;
+
+      const marker = document.createElement('div');
+      marker.className = 'obs-marker';
+      marker.style.left = `${e.clientX - rect.left}px`;
+      marker.style.top = `${e.clientY - rect.top}px`;
+      document.getElementById('record-camera-slot').appendChild(marker);
+      setTimeout(() => marker.remove(), 600);
+
+      document.getElementById('record-hint').textContent = '✅ Rocket marked! Tap again to re-mark, or report ready.';
+      document.getElementById('report-ready-btn').disabled = false;
+    });
 
     async function refreshCurrentFlight() {
       const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
@@ -725,14 +750,20 @@
       mediaRecorder.onstop = () => {
         const blob = new Blob(recordedChunks, { type: recordedChunks[0]?.type || 'video/webm' });
         const playback = document.getElementById('playback-feed');
-        playback.src = URL.createObjectURL(blob);
         anchorPatch = null;
-        trackingStarted = false;
-        document.getElementById('tag-hint').style.display = 'block';
-        document.getElementById('skip-frame-btn').style.display = 'block';
         document.getElementById('recording-indicator').classList.remove('visible');
         document.getElementById('stop-recording-btn').style.display = 'none';
         showStep('tag');
+
+        // Seed from the pad tap taken during Report Ready - no human step
+        // left here, so tracking starts the instant the first frame decodes.
+        const startTracking = () => {
+          recordObservation(seedPixelX, seedPixelY, 'manual');
+          captureAnchor(seedPixelX, seedPixelY);
+          runAutomaticTracking();
+        };
+        playback.addEventListener('loadeddata', startTracking, { once: true });
+        playback.src = URL.createObjectURL(blob);
       };
       mediaRecorder.start();
       document.getElementById('report-ready-btn').style.display = 'none';
@@ -767,7 +798,6 @@
     let anchorPatch = null;
     let anchorX = null;
     let anchorY = null;
-    let trackingStarted = false;
 
     function grabFramePixels(video) {
       const canvas = document.getElementById('tracking-canvas');
@@ -856,7 +886,7 @@
     function updateTagCounts() {
       const tagged = taggedObservations.filter((o) => o.pixel_x != null).length;
       document.getElementById('tag-progress-pill').textContent =
-        `${taggedObservations.length} reviewed, ${tagged} tagged`;
+        `${taggedObservations.length} processed, ${tagged} tracked`;
     }
 
     function recordObservation(pixelX, pixelY, observationSource, localTimestampMs) {
@@ -873,48 +903,6 @@
       });
       updateTagCounts();
     }
-
-    function advanceTagFrame() {
-      const video = document.getElementById('playback-feed');
-      const nextTime = video.currentTime + FRAME_STEP_SECONDS;
-      if (!isFinite(video.duration) || nextTime >= video.duration) {
-        enterUploadStep();
-      } else {
-        video.currentTime = nextTime;
-      }
-    }
-
-    document.getElementById('tag-video-wrap').addEventListener('click', (e) => {
-      if (trackingStarted) return;
-      const video = document.getElementById('playback-feed');
-      const rect = video.getBoundingClientRect();
-      const scaleX = video.videoWidth / rect.width;
-      const scaleY = video.videoHeight / rect.height;
-      const pixelX = (e.clientX - rect.left) * scaleX;
-      const pixelY = (e.clientY - rect.top) * scaleY;
-
-      recordObservation(pixelX, pixelY, 'manual');
-      captureAnchor(pixelX, pixelY);
-
-      const marker = document.createElement('div');
-      marker.className = 'obs-marker';
-      marker.style.left = `${e.clientX - rect.left}px`;
-      marker.style.top = `${e.clientY - rect.top}px`;
-      document.getElementById('tag-video-wrap').appendChild(marker);
-      setTimeout(() => marker.remove(), 600);
-
-      trackingStarted = true;
-      document.getElementById('tag-hint').style.display = 'none';
-      document.getElementById('skip-frame-btn').style.display = 'none';
-      runAutomaticTracking();
-    });
-
-    // Pre-seed only: the rocket isn't visible yet, so just move ahead one
-    // frame and look again - there's nothing to track until the seed tap.
-    document.getElementById('skip-frame-btn').addEventListener('click', () => {
-      recordObservation(null, null);
-      advanceTagFrame();
-    });
 
     // --- Step 5: Upload ---
     async function enterUploadStep() {
@@ -968,16 +956,21 @@
     document.getElementById('record-another-btn').addEventListener('click', () => {
       const readyBtn = document.getElementById('report-ready-btn');
       readyBtn.style.display = 'block';
-      readyBtn.disabled = false;
+      readyBtn.disabled = true;
       readyBtn.textContent = "👉 Click Here to Report Ready";
       document.getElementById('stop-recording-btn').style.display = 'none';
       document.getElementById('recording-indicator').classList.remove('visible');
+      document.getElementById('record-hint').textContent = 'Tap the rocket on the pad to mark it, then report ready.';
 
       // A camera could've been bumped between flights - require a fresh
       // aim-lock before the station can report ready again. Camera/motion
       // permission is already granted this page load, so the live view
       // just moves back to the Aim step rather than re-showing that gate.
+      // A new pad tap is required too, since the old seed position may no
+      // longer match the rocket's position under a different aim.
       mustReaimBeforeNextFlight = true;
+      seedPixelX = null;
+      seedPixelY = null;
       const liveView = document.getElementById('live-camera-view');
       if (liveView) document.getElementById('aim-camera-slot').appendChild(liveView);
       document.getElementById('aim-gate').style.display = 'none';
