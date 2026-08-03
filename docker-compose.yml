@@ -15,5 +15,14 @@ services:
     ports:
       - "6379:6379"
 
+  web:
+    build: .
+    env_file: .env
+    depends_on:
+      - db
+      - redis
+    ports:
+      - "8000:8000"
+
 volumes:
   db_data:
