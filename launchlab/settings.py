@@ -32,6 +32,11 @@ DEBUG = env.bool('DEBUG', default=False)
 
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=[])
 
+# Shared site-wide password (HTTP Basic Auth) - see core/basic_auth.py.
+# Blank means disabled, which is the default for local dev/tests.
+SITE_BASIC_AUTH_USER = env('SITE_BASIC_AUTH_USER', default='')
+SITE_BASIC_AUTH_PASSWORD = env('SITE_BASIC_AUTH_PASSWORD', default='')
+
 # Cookies only make sense over HTTPS once this is a real deploy. Off by
 # default so local Docker testing without a TLS proxy in front still works.
 SESSION_COOKIE_SECURE = not DEBUG
@@ -62,6 +67,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'core.middleware.BasicAuthMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',

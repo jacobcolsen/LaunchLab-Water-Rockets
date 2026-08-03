@@ -27,6 +27,7 @@ from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
+from .basic_auth import check_basic_auth
 from .optical_models import TrackingStation
 
 HEARTBEAT_INTERVAL_SECONDS = 5
@@ -37,6 +38,16 @@ RELAYED_MESSAGE_TYPES = {"countdown_start", "flight_prep_start", "station_ready"
 
 class TrackingSessionConsumer(AsyncWebsocketConsumer):
     async def connect(self):
+        # Django's MIDDLEWARE (including BasicAuthMiddleware) never runs for
+        # this connection - the websocket protocol is routed straight to
+        # this consumer in launchlab/asgi.py, bypassing django_asgi_app
+        # entirely - so the same shared-password check needs to happen here.
+        headers = dict(self.scope.get("headers") or [])
+        auth_header = headers.get(b"authorization", b"").decode("latin-1")
+        if not check_basic_auth(auth_header):
+            await self.close(code=4401)
+            return
+
         self.session_id = self.scope["url_route"]["kwargs"]["session_id"]
         self.group_name = f"optical_session_{self.session_id}"
         self.station_id = None
