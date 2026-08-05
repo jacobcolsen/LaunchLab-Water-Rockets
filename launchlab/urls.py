@@ -57,6 +57,7 @@ from core.optical_views import (
 from core.views import control_view, health, station_qr_view, station_view
 
 urlpatterns = [
+    path('', optical_control_view, name='root'),
     path('admin/', admin.site.urls),
     path('health', health, name='health'),
     path('control', control_view, name='control'),
