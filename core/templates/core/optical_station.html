@@ -161,13 +161,6 @@
       animation: bigBtnPulse 2.2s ease-in-out infinite;
     }
     #report-ready-btn:disabled { opacity: 0.6; cursor: default; box-shadow: none; animation: none; }
-    #stop-recording-btn {
-      position: absolute; bottom: 2.5rem; left: 50%; transform: translateX(-50%); z-index: 5;
-      font-size: 1.3rem; font-weight: 800; padding: 1.1rem 2rem;
-      border-radius: 999px; border: none; cursor: pointer; color: #fff;
-      background: var(--accent-red);
-      box-shadow: 0 0 20px rgba(239,68,68,0.6);
-    }
     #recording-indicator {
       position: absolute; top: 3.5rem; left: 50%; transform: translateX(-50%); z-index: 5;
       background: rgba(239,68,68,0.85); color: #fff; padding: 0.35rem 0.9rem; border-radius: 999px;
@@ -266,7 +259,6 @@
       <p class="hint" id="record-hint">Tap the rocket on the pad to mark it, then report ready.</p>
       <div id="record-camera-slot"></div>
       <button type="button" id="report-ready-btn" disabled>👉 Click Here to Report Ready</button>
-      <button type="button" id="stop-recording-btn" style="display:none;">⏹ Stop Recording</button>
     </div>
 
     <!-- Step 4: Tag the Rocket -->
@@ -734,11 +726,11 @@
       }
     }
 
-    // Recording is never started by a tap - it auto-starts the instant the
-    // launch controller's countdown begins (countdown_start, above), so
-    // there's a few seconds of buffer before actual liftoff. Before that,
-    // this screen is just the camera view + reporting ready. Stopping
-    // stays a manual call - the operator judges when the flight is over.
+    // Recording is never started or stopped by a station tap - it
+    // auto-starts the instant the launch controller's countdown begins
+    // (countdown_start, above), so there's a few seconds of buffer before
+    // actual liftoff, and auto-stops on flight_landed (below). Mission
+    // control alone decides when a flight starts and ends.
     function autoStartRecording() {
       if (!cameraStream || (mediaRecorder && mediaRecorder.state === 'recording')) return;
 
@@ -752,7 +744,6 @@
         const playback = document.getElementById('playback-feed');
         anchorPatch = null;
         document.getElementById('recording-indicator').classList.remove('visible');
-        document.getElementById('stop-recording-btn').style.display = 'none';
         showStep('tag');
 
         // Seed from the pad tap taken during Report Ready - no human step
@@ -768,23 +759,16 @@
       mediaRecorder.start();
       document.getElementById('report-ready-btn').style.display = 'none';
       document.getElementById('recording-indicator').classList.add('visible');
-      document.getElementById('stop-recording-btn').style.display = 'block';
     }
 
     // Mirrors autoStartRecording - stops the instant the controller marks
-    // Touchdown, same as the manual Stop button below, so nobody has to
-    // remember to tap it once the flight's actually over.
+    // Touchdown, so nobody at a station has to (or can) end the recording
+    // on their own judgment.
     function autoStopRecording() {
       if (mediaRecorder && mediaRecorder.state === 'recording') {
         mediaRecorder.stop();
       }
     }
-
-    document.getElementById('stop-recording-btn').addEventListener('click', () => {
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        mediaRecorder.stop();
-      }
-    });
 
     // --- Automatic tracking (Phase 12's block-matching, driven unattended) ---
     const PATCH_RADIUS = 12;
@@ -958,7 +942,6 @@
       readyBtn.style.display = 'block';
       readyBtn.disabled = true;
       readyBtn.textContent = "👉 Click Here to Report Ready";
-      document.getElementById('stop-recording-btn').style.display = 'none';
       document.getElementById('recording-indicator').classList.remove('visible');
       document.getElementById('record-hint').textContent = 'Tap the rocket on the pad to mark it, then report ready.';
 
