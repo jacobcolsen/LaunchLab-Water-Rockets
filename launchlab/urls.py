@@ -104,7 +104,6 @@ urlpatterns = [
         StationRecalibrateView.as_view(),
         name='api-station-recalibrate',
     ),
-    path('optical/control', optical_control_view, name='optical-control'),
     path('optical/station', optical_station_view, name='optical-station'),
     path(
         'optical/sessions/<int:session_id>/qr.png',

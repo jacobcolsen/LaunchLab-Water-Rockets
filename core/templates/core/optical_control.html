@@ -316,7 +316,7 @@
           body: JSON.stringify({ name }),
         });
         const data = await res.json();
-        window.location = `/optical/control?session=${data.id}`;
+        window.location = `/?session=${data.id}`;
       });
     } else {
       document.getElementById('join-url').textContent =
