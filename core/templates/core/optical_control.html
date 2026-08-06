@@ -38,6 +38,26 @@
     #summary-events-list { margin-top: 0.5rem; font-size: 0.9rem; padding: 0; }
     #summary-events-list li { padding: 0.3rem 0; border-bottom: 1px solid var(--border); list-style: none; }
 
+    #layout-modal { align-items: flex-start; overflow-y: auto; padding: 2rem 1rem 4rem; }
+    #layout-modal .confirm-box { max-width: 640px; width: 100%; text-align: left; }
+    #layout-modal h2 { margin: 0; font-size: 1.2rem; text-transform: none; letter-spacing: normal; color: var(--text-primary); }
+    #layout-instructions { margin: 0.75rem 0 1.25rem; padding-left: 1.25rem; font-size: 0.9rem; }
+    #layout-instructions li { margin-bottom: 0.4rem; }
+    .layout-count-row { display: flex; gap: 0.5rem; margin: 0.4rem 0 1rem; }
+    .layout-count-btn {
+      flex: 1; padding: 0.6rem 0; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--surface-elevated); color: var(--text-primary); font-weight: 700;
+      font-size: 1.05rem; cursor: pointer;
+    }
+    .layout-count-btn.active { border-color: var(--accent-cyan); background: rgba(45,212,238,0.15); color: var(--accent-cyan); }
+    .layout-input-row { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+    .layout-input-row > div { flex: 1; min-width: 180px; }
+    .layout-input-row label { display: block; font-weight: 700; font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.3rem; }
+    .layout-input-row input { width: 100%; box-sizing: border-box; font-size: 1rem; padding: 0.55rem 0.7rem; }
+    #layout-diagram { width: 100%; max-width: 320px; display: block; margin: 0.5rem auto 1rem; border-radius: 12px; background: #05070d; }
+    #layout-table th, #layout-table td { text-align: center; }
+    #layout-table td:first-child, #layout-table th:first-child { text-align: left; }
+
     .new-flight-btn {
       display: block; width: 100%; margin: 0.85rem 0 1.1rem;
       padding: 1.15rem 1.5rem; font-size: 1.35rem; font-weight: 800;
@@ -174,6 +194,12 @@
     </div>
   {% else %}
     <div class="card">
+      <h2>Station Setup</h2>
+      <p class="hint" style="margin-bottom: 0.75rem;">Figure out where to physically put each station before anyone shows up.</p>
+      <button type="button" id="open-layout-btn" class="btn btn-secondary">📐 Plan Station Layout</button>
+    </div>
+
+    <div class="card">
       <h2>Join</h2>
       <div class="join-row">
         <img id="qr-code" alt="Scan to join">
@@ -293,6 +319,56 @@
           </div>
           <div id="summary-limitations" class="summary-limitations" style="display:none;"></div>
         </div>
+      </div>
+    </div>
+
+    <div id="layout-modal" class="confirm-overlay">
+      <div class="confirm-box card">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h2>📐 Plan Station Layout</h2>
+          <button type="button" id="layout-close-btn" class="btn-icon">✕</button>
+        </div>
+        <p class="hint" style="margin-top:0.5rem;">A starting suggestion for where to put each station - walk it off with paces, no tape measure needed.</p>
+
+        <ol id="layout-instructions">
+          <li>Pick how many stations you have.</li>
+          <li>Enter about how high you expect the rocket to fly - the suggested distances scale to this.</li>
+          <li>Figure out your pace length: walk 10 normal steps in a straight line, measure the distance in meters, divide by 10, and type that in.</li>
+          <li>For each station: stand at the pad, face the compass bearing shown (use your phone's compass), and walk the number of paces shown - that's the spot.</li>
+          <li>On that station's phone, open the Position step and type in the <strong>East</strong> and <strong>North</strong> meters shown for that station - not the paces, the app itself needs meters.</li>
+          <li>If a spot's blocked (a tree, fence, etc.), it's fine to move a few meters - just note how far off you ended up and adjust the East/North numbers to match.</li>
+        </ol>
+
+        <label style="font-weight:700; font-size:0.85rem; color:var(--text-muted);">How many stations?</label>
+        <div class="layout-count-row" id="layout-count-row">
+          <button type="button" class="layout-count-btn" data-count="1">1</button>
+          <button type="button" class="layout-count-btn" data-count="2">2</button>
+          <button type="button" class="layout-count-btn active" data-count="3">3</button>
+          <button type="button" class="layout-count-btn" data-count="4">4</button>
+          <button type="button" class="layout-count-btn" data-count="5">5</button>
+        </div>
+
+        <div class="layout-input-row">
+          <div>
+            <label for="layout-altitude">Expected max altitude (meters)</label>
+            <input type="number" id="layout-altitude" value="60" min="1" step="any">
+            <div class="field-hint">Unsure? A typical water rocket often reaches roughly 30-60m - adjust if yours flies higher or lower.</div>
+          </div>
+          <div>
+            <label for="layout-pace-length">Your pace length (meters)</label>
+            <input type="number" id="layout-pace-length" value="0.75" min="0.1" step="any">
+            <div class="field-hint">Walk 10 normal steps, measure the distance, divide by 10.</div>
+          </div>
+        </div>
+
+        <canvas id="layout-diagram" width="320" height="320"></canvas>
+
+        <table id="layout-table">
+          <thead>
+            <tr><th>Station</th><th>Bearing</th><th>Paces</th><th>East (m)</th><th>North (m)</th></tr>
+          </thead>
+          <tbody id="layout-table-body"></tbody>
+        </table>
       </div>
     </div>
   {% endif %}
@@ -800,6 +876,123 @@
 
       document.getElementById('summary-close-btn').addEventListener('click', () => {
         document.getElementById('summary-modal').style.display = 'none';
+      });
+
+      // --- Station Layout Helper: pure client-side geometry, nothing saved
+      // or sent to the server - just turns "where do I put N stations" into
+      // concrete meters (what the app needs) and paces (what a kid without
+      // a tape measure can actually walk). Stations are spread evenly
+      // around the pad (360/N apart, station 1 due north) rather than
+      // clustered into an arc, since even angular spacing is what actually
+      // helps triangulation - see core/optical_rays.py for how these
+      // East/North meters get consumed once typed into a station's phone.
+      let layoutStationCount = 3;
+
+      function computeLayoutStations() {
+        const altitude = parseFloat(document.getElementById('layout-altitude').value) || 0;
+        const radius = Math.max(10, altitude * 0.5);
+        const stations = [];
+        for (let i = 0; i < layoutStationCount; i++) {
+          const bearingDeg = i * (360 / layoutStationCount);
+          const bearingRad = bearingDeg * Math.PI / 180;
+          stations.push({
+            index: i + 1,
+            bearingDeg,
+            eastM: radius * Math.sin(bearingRad),
+            northM: radius * Math.cos(bearingRad),
+            distanceM: radius,
+          });
+        }
+        return stations;
+      }
+
+      function drawLayoutDiagram(stations) {
+        const canvas = document.getElementById('layout-diagram');
+        const { ctx, W, H } = sizeCanvasForDisplay(canvas);
+        ctx.clearRect(0, 0, W, H);
+
+        const cx = W / 2, cy = H / 2;
+        const maxDist = Math.max(...stations.map((s) => s.distanceM), 1);
+        const scale = (Math.min(W, H) / 2 - 30) / maxDist;
+
+        // Pad at center
+        ctx.fillStyle = '#f97316';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#9ca8bd';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('PAD', cx, cy - 12);
+
+        stations.forEach((s) => {
+          const x = cx + s.eastM * scale;
+          const y = cy - s.northM * scale;
+          ctx.strokeStyle = 'rgba(45,212,238,0.35)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(cx, cy);
+          ctx.lineTo(x, y);
+          ctx.stroke();
+
+          ctx.fillStyle = '#2dd4ee';
+          ctx.beginPath();
+          ctx.arc(x, y, 7, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = '#05070d';
+          ctx.font = 'bold 10px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(String(s.index), x, y + 0.5);
+        });
+      }
+
+      function renderLayoutTable(stations) {
+        const paceLength = parseFloat(document.getElementById('layout-pace-length').value) || 0;
+        document.getElementById('layout-table-body').innerHTML = stations.map((s) => {
+          const paces = paceLength > 0 ? Math.round(s.distanceM / paceLength) : null;
+          return `
+            <tr>
+              <td>${s.index}</td>
+              <td>${s.bearingDeg.toFixed(0)}°</td>
+              <td>${paces != null ? paces : '—'}</td>
+              <td>${s.eastM.toFixed(1)}</td>
+              <td>${s.northM.toFixed(1)}</td>
+            </tr>
+          `;
+        }).join('');
+      }
+
+      function refreshLayoutModal() {
+        const stations = computeLayoutStations();
+        drawLayoutDiagram(stations);
+        renderLayoutTable(stations);
+      }
+
+      document.getElementById('layout-count-row').addEventListener('click', (e) => {
+        const btn = e.target.closest('.layout-count-btn');
+        if (!btn) return;
+        layoutStationCount = parseInt(btn.dataset.count, 10);
+        document.querySelectorAll('.layout-count-btn').forEach((b) => {
+          b.classList.toggle('active', b === btn);
+        });
+        refreshLayoutModal();
+      });
+
+      ['layout-altitude', 'layout-pace-length'].forEach((id) => {
+        document.getElementById(id).addEventListener('input', refreshLayoutModal);
+      });
+
+      document.getElementById('open-layout-btn').addEventListener('click', () => {
+        // Show the modal before measuring the canvas - sizeCanvasForDisplay
+        // needs its real, laid-out size (same ordering as the summary chart).
+        document.getElementById('layout-modal').style.display = 'flex';
+        refreshLayoutModal();
+      });
+
+      document.getElementById('layout-close-btn').addEventListener('click', () => {
+        document.getElementById('layout-modal').style.display = 'none';
       });
 
       document.getElementById('validate-form').addEventListener('submit', async (e) => {
