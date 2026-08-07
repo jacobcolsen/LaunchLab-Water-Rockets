@@ -11,6 +11,7 @@
     body { background: #05070d; color: var(--text-primary); }
     .error { color: var(--accent-red); }
     .hint { color: var(--text-muted); }
+    #upload-detail { white-space: pre-wrap; word-break: break-word; font-size: 0.85rem; }
 
     /* --- Step scaffold: one full-screen step visible at a time --- */
     .step {
@@ -696,6 +697,8 @@
         document.getElementById('recording-indicator').classList.remove('visible');
         showStep('tag');
 
+        trackingDebugInfo = { blobSizeBytes: blob.size, blobType: blob.type, chunkCount: recordedChunks.length };
+
         // Seed from the pad tap taken during Report Ready - no human step
         // left here, so tracking starts the instant the first frame decodes.
         // loadedmetadata is listed alongside loadeddata since Safari is
@@ -705,11 +708,16 @@
           const readyPromise = waitForEventOrTimeout(playback, ['loadeddata', 'loadedmetadata'], VIDEO_READY_TIMEOUT_MS);
           playback.src = URL.createObjectURL(blob);
           const ready = await readyPromise;
+          trackingDebugInfo.videoReady = ready;
           if (!ready) {
             showTagError("Couldn't process the recording on this device.");
             return;
           }
           await resolveVideoDuration(playback);
+          trackingDebugInfo.durationAfterResolve = playback.duration;
+          trackingDebugInfo.readyState = playback.readyState;
+          trackingDebugInfo.videoWidth = playback.videoWidth;
+          trackingDebugInfo.videoHeight = playback.videoHeight;
           recordObservation(seedPixelX, seedPixelY, 'manual');
           captureAnchor(seedPixelX, seedPixelY);
           runAutomaticTracking();
@@ -747,6 +755,13 @@
     let anchorPatch = null;
     let anchorX = null;
     let anchorY = null;
+
+    // Surfaced in the upload confirmation text so a real device's actual
+    // video/seek behavior is visible without needing devtools/console
+    // access - two rounds of blind guessing based on documented Safari
+    // quirks haven't matched what's actually happening on this specific
+    // phone, so the next test should show real numbers instead.
+    let trackingDebugInfo = {};
 
     function grabFramePixels(video) {
       const canvas = document.getElementById('tracking-canvas');
@@ -870,10 +885,21 @@
 
       let lastTime = video.currentTime;
       let frameNumber = 0;
+      let firstSeekLogged = false;
+
+      trackingDebugInfo.startTime = video.currentTime;
 
       while (frameNumber < MAX_TRACKED_FRAMES) {
-        video.currentTime = lastTime + FRAME_STEP_SECONDS;
+        const seekTarget = lastTime + FRAME_STEP_SECONDS;
+        video.currentTime = seekTarget;
         const seeked = await waitForEventOrTimeout(video, 'seeked', SEEK_TIMEOUT_MS);
+        if (!firstSeekLogged) {
+          trackingDebugInfo.firstSeekTarget = seekTarget;
+          trackingDebugInfo.firstSeekFired = seeked;
+          trackingDebugInfo.firstSeekLanded = video.currentTime;
+          trackingDebugInfo.firstSeekEnded = video.ended;
+          firstSeekLogged = true;
+        }
         if (!seeked) break; // Stuck mid-clip - stop here and upload what we've got rather than hang.
         if (video.ended || video.currentTime <= lastTime + 0.001) break; // Reached the real end.
         lastTime = video.currentTime;
@@ -961,8 +987,11 @@
         detail.textContent = err.message;
       }
 
+      detail.textContent += `\n\nDebug: ${JSON.stringify(trackingDebugInfo)}`;
+
       taggedObservations = [];
       nextFrameIndex = 0;
+      trackingDebugInfo = {};
       updateTagCounts();
       againBtn.style.display = 'block';
     }
