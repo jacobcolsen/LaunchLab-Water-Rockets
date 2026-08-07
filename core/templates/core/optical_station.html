@@ -698,13 +698,23 @@
 
         // Seed from the pad tap taken during Report Ready - no human step
         // left here, so tracking starts the instant the first frame decodes.
-        const startTracking = () => {
+        // loadedmetadata is listed alongside loadeddata since Safari is
+        // more consistent about firing that one; VIDEO_READY_TIMEOUT_MS
+        // covers the case where neither ever fires (observed on iOS).
+        const startTracking = async () => {
+          const readyPromise = waitForEventOrTimeout(playback, ['loadeddata', 'loadedmetadata'], VIDEO_READY_TIMEOUT_MS);
+          playback.src = URL.createObjectURL(blob);
+          const ready = await readyPromise;
+          if (!ready) {
+            showTagError("Couldn't process the recording on this device.");
+            return;
+          }
+          await resolveVideoDuration(playback);
           recordObservation(seedPixelX, seedPixelY, 'manual');
           captureAnchor(seedPixelX, seedPixelY);
           runAutomaticTracking();
         };
-        playback.addEventListener('loadeddata', startTracking, { once: true });
-        playback.src = URL.createObjectURL(blob);
+        startTracking();
       };
       mediaRecorder.start();
       document.getElementById('report-ready-btn').style.display = 'none';
@@ -728,6 +738,11 @@
     // untrusted and the frame is recorded as "no observation" instead. A
     // starting guess, not tuned against real device footage yet.
     const CONFIDENCE_SAD_THRESHOLD = 30;
+    // Safari frequently never fires 'loadeddata' (sometimes not even
+    // 'loadedmetadata') for a blob sourced from MediaRecorder output - these
+    // timeouts turn that into a visible error instead of a silent hang.
+    const VIDEO_READY_TIMEOUT_MS = 8000;
+    const SEEK_TIMEOUT_MS = 5000;
 
     let anchorPatch = null;
     let anchorX = null;
@@ -781,8 +796,48 @@
       anchorY = pixelY;
     }
 
-    function waitForSeek(video) {
-      return new Promise((resolve) => video.addEventListener('seeked', resolve, { once: true }));
+    // Resolves true once any of eventNames fires on target, or false if
+    // timeoutMs elapses first - lets callers treat "the browser never sent
+    // this event" (a real, observed Safari/iOS behavior) as a normal
+    // outcome to handle, rather than an unbounded wait.
+    function waitForEventOrTimeout(target, eventNames, timeoutMs) {
+      return new Promise((resolve) => {
+        const events = Array.isArray(eventNames) ? eventNames : [eventNames];
+        let settled = false;
+        const cleanup = () => {
+          events.forEach((name) => target.removeEventListener(name, onEvent));
+          clearTimeout(timer);
+        };
+        const onEvent = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(true);
+        };
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve(false);
+        }, timeoutMs);
+        events.forEach((name) => target.addEventListener(name, onEvent));
+      });
+    }
+
+    // Safari commonly reports a MediaRecorder-sourced video's duration as
+    // Infinity until it's force-seeked at least once - this is the standard
+    // workaround (seek near the end, let Safari recompute, seek back to 0).
+    // No-op if duration is already finite (Chrome/Firefox already get this right).
+    async function resolveVideoDuration(video) {
+      if (isFinite(video.duration)) return;
+      video.currentTime = Number.MAX_SAFE_INTEGER;
+      await waitForEventOrTimeout(video, ['timeupdate', 'durationchange'], SEEK_TIMEOUT_MS);
+      video.currentTime = 0;
+      await waitForEventOrTimeout(video, 'seeked', SEEK_TIMEOUT_MS);
+    }
+
+    function showTagError(message) {
+      document.getElementById('tag-progress-pill').textContent = `⚠️ ${message} Tap ‹ to go back and try again.`;
     }
 
     // Runs unattended from the seed tap to the end of the clip: steps one
@@ -798,7 +853,8 @@
 
       while (isFinite(video.duration) && video.currentTime + FRAME_STEP_SECONDS < video.duration) {
         video.currentTime += FRAME_STEP_SECONDS;
-        await waitForSeek(video);
+        const seeked = await waitForEventOrTimeout(video, 'seeked', SEEK_TIMEOUT_MS);
+        if (!seeked) break; // Stuck mid-clip - stop here and upload what we've got rather than hang.
 
         const imageData = grabFramePixels(video);
         const best = findBestMatch(imageData, anchorPatch, anchorX, anchorY);
