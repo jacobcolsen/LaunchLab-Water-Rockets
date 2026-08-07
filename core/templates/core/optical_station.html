@@ -824,10 +824,13 @@
       });
     }
 
-    // Safari commonly reports a MediaRecorder-sourced video's duration as
-    // Infinity until it's force-seeked at least once - this is the standard
-    // workaround (seek near the end, let Safari recompute, seek back to 0).
-    // No-op if duration is already finite (Chrome/Firefox already get this right).
+    // Best-effort only - Safari commonly reports a MediaRecorder-sourced
+    // video's duration as Infinity until force-seeked, and this workaround
+    // (seek near the end, let it recompute, seek back to 0) doesn't reliably
+    // fix that on every device. Used only to show a nicer "frame X/Y" total
+    // when it works - runAutomaticTracking's loop below does NOT depend on
+    // this succeeding, since relying on it left the loop unable to run at
+    // all the one time this was tested on a real iPhone.
     async function resolveVideoDuration(video) {
       if (isFinite(video.duration)) return;
       video.currentTime = Number.MAX_SAFE_INTEGER;
@@ -840,21 +843,40 @@
       document.getElementById('tag-progress-pill').textContent = `⚠️ ${message} Tap ‹ to go back and try again.`;
     }
 
+    // Generous safety cap on frame count, independent of video.duration
+    // (which can't be trusted - see resolveVideoDuration) - just to
+    // guarantee this loop can never run forever. 90s at 30fps is far
+    // longer than any real water rocket flight.
+    const MAX_TRACKED_FRAMES = 2700;
+
     // Runs unattended from the seed tap to the end of the clip: steps one
     // frame at a time, matches against the last good anchor, and either
     // records a real point (confident) or "no observation" (not confident) -
     // never a guess dressed up as a real sighting. A low-confidence frame
     // keeps the last good anchor rather than clearing it, since there's no
     // human left to re-tap and reacquire the rocket.
+    //
+    // End-of-clip is detected by whether currentTime actually advances
+    // after a seek, not by video.duration - Safari frequently never
+    // resolves a real duration for a MediaRecorder-sourced blob no matter
+    // what workaround is tried, and relying on it left this loop unable to
+    // run a single frame the one time this was tested on a real iPhone.
+    // Seeking past the true end clamps currentTime instead of erroring,
+    // which is what actually marks the end here.
     async function runAutomaticTracking() {
       const video = document.getElementById('playback-feed');
       const pill = document.getElementById('tag-progress-pill');
-      const totalFrames = isFinite(video.duration) ? Math.floor(video.duration / FRAME_STEP_SECONDS) : 0;
+      const totalFrames = isFinite(video.duration) ? Math.floor(video.duration / FRAME_STEP_SECONDS) : null;
 
-      while (isFinite(video.duration) && video.currentTime + FRAME_STEP_SECONDS < video.duration) {
-        video.currentTime += FRAME_STEP_SECONDS;
+      let lastTime = video.currentTime;
+      let frameNumber = 0;
+
+      while (frameNumber < MAX_TRACKED_FRAMES) {
+        video.currentTime = lastTime + FRAME_STEP_SECONDS;
         const seeked = await waitForEventOrTimeout(video, 'seeked', SEEK_TIMEOUT_MS);
         if (!seeked) break; // Stuck mid-clip - stop here and upload what we've got rather than hang.
+        if (video.ended || video.currentTime <= lastTime + 0.001) break; // Reached the real end.
+        lastTime = video.currentTime;
 
         const imageData = grabFramePixels(video);
         const best = findBestMatch(imageData, anchorPatch, anchorX, anchorY);
@@ -866,8 +888,10 @@
           recordObservation(null, null);
         }
 
-        const frameNumber = Math.round(video.currentTime / FRAME_STEP_SECONDS);
-        pill.textContent = `🤖 Tracking… frame ${frameNumber}/${totalFrames}`;
+        frameNumber++;
+        pill.textContent = totalFrames
+          ? `🤖 Tracking… frame ${frameNumber}/${totalFrames}`
+          : `🤖 Tracking… frame ${frameNumber}`;
       }
 
       enterUploadStep();
