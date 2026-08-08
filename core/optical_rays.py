@@ -1,8 +1,15 @@
-"""Turns a station's manually-tagged pixel taps into 3D rays (origin +
-bearing direction) aligned onto a shared time grid across stations - the
-direct input Phase 7's triangulation will consume. Mirrors
+"""Turns a station's per-frame bearing observations into 3D rays (origin
++ bearing direction) aligned onto a shared time grid across stations -
+the direct input Phase 7's triangulation will consume. Mirrors
 core/triangulation.py's shape for the clinometer: interpolate onto a
 common grid, never extrapolate past what a station actually recorded.
+
+An observation's bearing comes from one of two sources: a tapped pixel
+(manual/assisted/automatic/simulated - resolved via pixel_to_bearing_vector
+against the station's locked calibration) or a live device-orientation
+sample (orientation - resolved via camera_forward_vector directly, since
+the sample already carries its own facing/pitch, bypassing pixel
+geometry and the locked calibration's stored orientation entirely).
 
 No 3D point-solving or outlier rejection happens here - purely ray
 generation. See core/triangulation.py's `triangulate()` for the pattern
@@ -10,7 +17,7 @@ a future multi-station solver here would follow.
 """
 import numpy as np
 
-from .optical_camera import pixel_to_bearing_vector
+from .optical_camera import camera_forward_vector, pixel_to_bearing_vector
 from .optical_models import PixelObservation
 
 GRID_STEP_MS = 50
@@ -22,9 +29,15 @@ def station_ground_position(station):
     return np.array([station.surveyed_x_m, station.surveyed_y_m, station.surveyed_z_m])
 
 
+def _observation_bearing(obs, calibration):
+    if obs.facing_deg is not None and obs.pitch_deg is not None:
+        return camera_forward_vector(obs.facing_deg, obs.pitch_deg)
+    return pixel_to_bearing_vector(obs.pixel_x, obs.pixel_y, calibration)
+
+
 def station_bearing_series(station, flight):
     """Time-sorted list of (synchronized_timestamp_ms, bearing unit
-    vector) for this station's valid, current pixel taps in the given
+    vector) for this station's valid, current observations in the given
     flight that have a synchronized_timestamp_ms - unsynced observations
     are excluded, since they can't be placed on a shared time grid yet."""
     calibration = station.calibrations.filter(is_active=True).first()
@@ -44,7 +57,7 @@ def station_bearing_series(station, flight):
     )
 
     return [
-        (obs.frame.synchronized_timestamp_ms, np.array(pixel_to_bearing_vector(obs.pixel_x, obs.pixel_y, calibration)))
+        (obs.frame.synchronized_timestamp_ms, np.array(_observation_bearing(obs, calibration)))
         for obs in observations
     ]
 

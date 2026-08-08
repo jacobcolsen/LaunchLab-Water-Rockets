@@ -19,10 +19,12 @@ stays null until the Phase 5 synchronization step runs.
 
 Confidence: every `confidence` field is a float on a 0.0-1.0 scale.
 
-observation_source: how a PixelObservation's pixel coordinates were
-produced - "manual" (user tapped the screen), "assisted" (tap + software
-refinement), "automatic" (unassisted tracking), or "simulated" (synthetic
-mock data).
+observation_source: how a PixelObservation's bearing was produced -
+"manual" (user tapped the screen), "assisted" (tap + software
+refinement), "automatic" (unassisted video tracking), "orientation" (a
+continuous device-orientation sample - no pixel geometry involved,
+pixel_x/pixel_y stay null and facing_deg/pitch_deg carry the bearing
+instead), or "simulated" (synthetic mock data).
 """
 import secrets
 
@@ -191,19 +193,28 @@ class PixelObservation(models.Model):
     SOURCE_MANUAL = "manual"
     SOURCE_ASSISTED = "assisted"
     SOURCE_AUTOMATIC = "automatic"
+    SOURCE_ORIENTATION = "orientation"
     SOURCE_SIMULATED = "simulated"
     OBSERVATION_SOURCE_CHOICES = [
         (SOURCE_MANUAL, "Manual"),
         (SOURCE_ASSISTED, "Assisted"),
         (SOURCE_AUTOMATIC, "Automatic"),
+        (SOURCE_ORIENTATION, "Orientation"),
         (SOURCE_SIMULATED, "Simulated"),
     ]
 
     frame = models.ForeignKey(
         FrameObservation, related_name="pixel_observations", on_delete=models.CASCADE
     )
-    pixel_x = models.FloatField()
-    pixel_y = models.FloatField()
+    # Null for orientation-sourced rows - there's no pixel tap to record,
+    # facing_deg/pitch_deg carry the bearing instead.
+    pixel_x = models.FloatField(null=True, blank=True)
+    pixel_y = models.FloatField(null=True, blank=True)
+    # Set only for orientation-sourced rows - a live device-orientation
+    # sample, converted straight to a bearing via camera_forward_vector
+    # (core/optical_camera.py), bypassing pixel geometry entirely.
+    facing_deg = models.FloatField(null=True, blank=True)
+    pitch_deg = models.FloatField(null=True, blank=True)
     confidence = models.FloatField(default=1.0)
     observation_source = models.CharField(max_length=20, choices=OBSERVATION_SOURCE_CHOICES)
     valid = models.BooleanField(default=True)

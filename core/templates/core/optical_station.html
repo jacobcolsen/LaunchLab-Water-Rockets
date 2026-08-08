@@ -55,13 +55,12 @@
       display: flex; align-items: center; justify-content: center;
     }
     .back-icon { top: 1rem; left: 1rem; }
-    .skip-icon { bottom: 1.5rem; right: 1rem; font-size: 1.3rem; }
 
     /* --- Shared full-screen camera view (moved between Aim/Record steps) --- */
-    #live-camera-view, #tag-video-wrap {
+    #live-camera-view {
       position: absolute; inset: 0; width: 100%; height: 100%; background: #05070d;
     }
-    #camera-feed, #playback-feed {
+    #camera-feed {
       width: 100%; height: 100%; object-fit: cover; display: block;
     }
     #camera-crosshair {
@@ -74,7 +73,7 @@
     }
     #camera-crosshair::before { top: 50%; left: 0; right: 0; height: 2px; transform: translateY(-50%); }
     #camera-crosshair::after { left: 50%; top: 0; bottom: 0; width: 2px; transform: translateX(-50%); }
-    #live-orientation, #flight-pill, #tag-progress-pill {
+    #live-orientation, #flight-pill {
       position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 5;
       background: rgba(11,15,26,0.7); padding: 0.35rem 0.9rem; border-radius: 999px;
       font-size: 0.9rem; color: var(--accent-cyan); pointer-events: none; white-space: nowrap;
@@ -93,11 +92,6 @@
       background: #05070d;
     }
 
-    #step-tag { padding: 0; }
-    .obs-marker {
-      position: absolute; width: 20px; height: 20px; border: 2px solid var(--accent-green);
-      border-radius: 50%; transform: translate(-50%, -50%); pointer-events: none;
-    }
     #record-hint {
       position: absolute; top: 3.75rem; left: 50%; transform: translateX(-50%); z-index: 5;
       max-width: 280px; margin: 0; text-align: center; text-shadow: 0 1px 4px rgba(0,0,0,0.8);
@@ -241,23 +235,13 @@
     <div id="step-record" class="step">
       <button type="button" id="back-to-aim-btn" class="icon-btn back-icon">‹</button>
       <div id="flight-pill">Flight: waiting…</div>
-      <div id="recording-indicator">⏺ Recording…</div>
-      <p class="hint" id="record-hint">Tap the rocket on the pad to mark it, then report ready.</p>
+      <div id="recording-indicator">⏺ Tracking…</div>
+      <p class="hint" id="record-hint">Report ready, then keep the rocket centered in the crosshair for the whole flight.</p>
       <div id="record-camera-slot"></div>
-      <button type="button" id="report-ready-btn" disabled>👉 Click Here to Report Ready</button>
+      <button type="button" id="report-ready-btn">👉 Click Here to Report Ready</button>
     </div>
 
-    <!-- Step 4: Tag the Rocket -->
-    <div id="step-tag" class="step">
-      <button type="button" id="back-to-record-btn" class="icon-btn back-icon">‹</button>
-      <div id="tag-progress-pill">🤖 Tracking automatically…</div>
-      <div id="tag-video-wrap">
-        <video id="playback-feed" playsinline muted></video>
-      </div>
-      <canvas id="tracking-canvas" style="display:none;"></canvas>
-    </div>
-
-    <!-- Step 5: Upload -->
+    <!-- Step 4: Upload -->
     <div id="step-upload" class="step">
       <div class="step-icon" id="upload-icon">⬆️</div>
       <h1 id="upload-heading">Uploading…</h1>
@@ -270,7 +254,7 @@
     const storageKey = `optical-station-${sessionId}`;
 
     // --- Step navigation ---
-    const STEP_IDS = ['position', 'aim', 'record', 'tag', 'upload'];
+    const STEP_IDS = ['position', 'aim', 'record', 'upload'];
     function showStep(name) {
       STEP_IDS.forEach((id) => {
         document.getElementById(`step-${id}`).classList.toggle('active', id === name);
@@ -279,7 +263,6 @@
 
     document.getElementById('back-to-position-btn').addEventListener('click', () => showStep('position'));
     document.getElementById('back-to-aim-btn').addEventListener('click', () => showStep('aim'));
-    document.getElementById('back-to-record-btn').addEventListener('click', () => showStep('record'));
 
     // --- Live-synced New Flight countdown (mirrors /control's countdown_start
     // push - one "go" signal, this phone runs its own identical local timer
@@ -591,9 +574,7 @@
       const liveView = document.getElementById('live-camera-view');
       if (liveView) document.getElementById('record-camera-slot').appendChild(liveView);
       document.getElementById('lock-aim-btn').style.display = 'none';
-      // Report Ready stays disabled until the rocket is tapped on the pad
-      // (see the record-camera-slot click listener above) - that tap is
-      // what seeds the automatic tracker later, so it's required, not optional.
+      document.getElementById('report-ready-btn').disabled = false;
       refreshCurrentFlight();
       if (!flightPollIntervalId) {
         flightPollIntervalId = setInterval(refreshCurrentFlight, 3000);
@@ -630,39 +611,16 @@
     }
 
     // --- Step 3: Record ---
-    let mediaRecorder = null;
-    let recordedChunks = [];
-    let taggedObservations = []; // {frame_index, local_timestamp_ms, pixel_x, pixel_y, observation_source}
-    let nextFrameIndex = 0;
     let currentFlightNumber = null;
     let flightPollIntervalId = null;
-    let seedPixelX = null;
-    let seedPixelY = null;
-    const FRAME_STEP_SECONDS = 1 / 30;
-
-    // Tap the rocket on the pad while it's stationary - this is what
-    // unlocks Report Ready, and its coordinates seed the automatic tracker
-    // once the flight is recorded, so nobody has to tap anything after.
-    document.getElementById('record-camera-slot').addEventListener('click', (e) => {
-      if (mediaRecorder && mediaRecorder.state === 'recording') return;
-      const video = document.getElementById('camera-feed');
-      if (!video) return;
-      const rect = video.getBoundingClientRect();
-      const scaleX = video.videoWidth / rect.width;
-      const scaleY = video.videoHeight / rect.height;
-      seedPixelX = (e.clientX - rect.left) * scaleX;
-      seedPixelY = (e.clientY - rect.top) * scaleY;
-
-      const marker = document.createElement('div');
-      marker.className = 'obs-marker';
-      marker.style.left = `${e.clientX - rect.left}px`;
-      marker.style.top = `${e.clientY - rect.top}px`;
-      document.getElementById('record-camera-slot').appendChild(marker);
-      setTimeout(() => marker.remove(), 600);
-
-      document.getElementById('record-hint').textContent = '✅ Rocket marked! Tap again to re-mark, or report ready.';
-      document.getElementById('report-ready-btn').disabled = false;
-    });
+    let orientationSampleIntervalId = null;
+    let orientationSamples = []; // {frame_index, local_timestamp_ms, facing_deg, pitch_deg}
+    let nextFrameIndex = 0;
+    // Matches GRID_STEP_MS (core/optical_rays.py) exactly - sampling faster
+    // than the triangulation grid resolves to wouldn't add any real
+    // accuracy, the same oversampling point raised when this project first
+    // looked at the old per-frame video tagging step.
+    const ORIENTATION_SAMPLE_INTERVAL_MS = 50;
 
     async function refreshCurrentFlight() {
       const res = await fetch(`/api/optical/sessions/${sessionId}/flights/`);
@@ -677,274 +635,45 @@
       }
     }
 
-    // Recording is never started or stopped by a station tap - it
+    // Tracking is never started or stopped by a station tap - it
     // auto-starts the instant the launch controller's countdown begins
     // (countdown_start, above), so there's a few seconds of buffer before
     // actual liftoff, and auto-stops on flight_landed (below). Mission
-    // control alone decides when a flight starts and ends.
+    // control alone decides when a flight starts and ends. No video is
+    // ever recorded - the operator just keeps the crosshair on the rocket,
+    // and the phone's own compass/tilt readings (already live via
+    // startOrientationListener/latestOrientation, above) are the data.
     function autoStartRecording() {
-      if (!cameraStream || (mediaRecorder && mediaRecorder.state === 'recording')) return;
-
-      recordedChunks = [];
-      mediaRecorder = new MediaRecorder(cameraStream);
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) recordedChunks.push(e.data);
-      };
-      mediaRecorder.onstop = () => {
-        const blob = new Blob(recordedChunks, { type: recordedChunks[0]?.type || 'video/webm' });
-        const playback = document.getElementById('playback-feed');
-        anchorPatch = null;
-        document.getElementById('recording-indicator').classList.remove('visible');
-        showStep('tag');
-
-        trackingDebugInfo = { blobSizeBytes: blob.size, blobType: blob.type, chunkCount: recordedChunks.length };
-
-        // Seed from the pad tap taken during Report Ready - no human step
-        // left here, so tracking starts the instant the first frame decodes.
-        // loadedmetadata is listed alongside loadeddata since Safari is
-        // more consistent about firing that one; VIDEO_READY_TIMEOUT_MS
-        // covers the case where neither ever fires (observed on iOS).
-        const startTracking = async () => {
-          const readyPromise = waitForEventOrTimeout(playback, ['loadeddata', 'loadedmetadata'], VIDEO_READY_TIMEOUT_MS);
-          playback.src = URL.createObjectURL(blob);
-          const ready = await readyPromise;
-          trackingDebugInfo.videoReady = ready;
-          if (!ready) {
-            showTagError("Couldn't process the recording on this device.");
-            return;
-          }
-          await resolveVideoDuration(playback);
-          trackingDebugInfo.durationAfterResolve = playback.duration;
-          trackingDebugInfo.readyState = playback.readyState;
-          trackingDebugInfo.videoWidth = playback.videoWidth;
-          trackingDebugInfo.videoHeight = playback.videoHeight;
-          recordObservation(seedPixelX, seedPixelY, 'manual');
-          captureAnchor(seedPixelX, seedPixelY);
-          runAutomaticTracking();
-        };
-        startTracking();
-      };
-      mediaRecorder.start();
+      if (orientationSampleIntervalId) return;
+      orientationSamples = [];
+      nextFrameIndex = 0;
+      orientationSampleIntervalId = setInterval(() => {
+        if (latestOrientation.facing == null || latestOrientation.pitch == null) return;
+        orientationSamples.push({
+          frame_index: nextFrameIndex++,
+          local_timestamp_ms: Date.now(),
+          facing_deg: latestOrientation.facing,
+          pitch_deg: latestOrientation.pitch,
+        });
+      }, ORIENTATION_SAMPLE_INTERVAL_MS);
       document.getElementById('report-ready-btn').style.display = 'none';
       document.getElementById('recording-indicator').classList.add('visible');
     }
 
     // Mirrors autoStartRecording - stops the instant the controller marks
-    // Touchdown, so nobody at a station has to (or can) end the recording
-    // on their own judgment.
+    // Touchdown, so nobody at a station has to (or can) end tracking on
+    // their own judgment. There's no video to process, so the buffered
+    // samples upload immediately - nothing async stands between Touchdown
+    // and Upload.
     function autoStopRecording() {
-      if (mediaRecorder && mediaRecorder.state === 'recording') {
-        mediaRecorder.stop();
-      }
-    }
-
-    // --- Automatic tracking (Phase 12's block-matching, driven unattended) ---
-    const PATCH_RADIUS = 12;
-    const SEARCH_RADIUS = 40;
-    const SEARCH_STEP = 2;
-    // Average per-pixel grayscale difference (0-255) above which a match is
-    // untrusted and the frame is recorded as "no observation" instead. A
-    // starting guess, not tuned against real device footage yet.
-    const CONFIDENCE_SAD_THRESHOLD = 30;
-    // Safari frequently never fires 'loadeddata' (sometimes not even
-    // 'loadedmetadata') for a blob sourced from MediaRecorder output - these
-    // timeouts turn that into a visible error instead of a silent hang.
-    const VIDEO_READY_TIMEOUT_MS = 8000;
-    const SEEK_TIMEOUT_MS = 5000;
-
-    let anchorPatch = null;
-    let anchorX = null;
-    let anchorY = null;
-
-    // Surfaced in the upload confirmation text so a real device's actual
-    // video/seek behavior is visible without needing devtools/console
-    // access - two rounds of blind guessing based on documented Safari
-    // quirks haven't matched what's actually happening on this specific
-    // phone, so the next test should show real numbers instead.
-    let trackingDebugInfo = {};
-
-    function grabFramePixels(video) {
-      const canvas = document.getElementById('tracking-canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
-      return ctx.getImageData(0, 0, video.videoWidth, video.videoHeight);
-    }
-
-    function extractPatch(imageData, cx, cy) {
-      const { width, height, data } = imageData;
-      const patch = [];
-      for (let dy = -PATCH_RADIUS; dy < PATCH_RADIUS; dy++) {
-        const y = Math.min(height - 1, Math.max(0, Math.round(cy + dy)));
-        for (let dx = -PATCH_RADIUS; dx < PATCH_RADIUS; dx++) {
-          const x = Math.min(width - 1, Math.max(0, Math.round(cx + dx)));
-          const idx = (y * width + x) * 4;
-          patch.push(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
-        }
-      }
-      return patch;
-    }
-
-    function findBestMatch(imageData, patch, startX, startY, searchRadius = SEARCH_RADIUS, searchStep = SEARCH_STEP) {
-      let best = { sad: Infinity, x: startX, y: startY };
-      for (let oy = -searchRadius; oy <= searchRadius; oy += searchStep) {
-        for (let ox = -searchRadius; ox <= searchRadius; ox += searchStep) {
-          const candidateX = startX + ox;
-          const candidateY = startY + oy;
-          const candidatePatch = extractPatch(imageData, candidateX, candidateY);
-          let sad = 0;
-          for (let i = 0; i < patch.length; i++) {
-            sad += Math.abs(patch[i] - candidatePatch[i]);
-          }
-          if (sad < best.sad) {
-            best = { sad, x: candidateX, y: candidateY };
-          }
-        }
-      }
-      return best;
-    }
-
-    function captureAnchor(pixelX, pixelY) {
-      anchorPatch = extractPatch(grabFramePixels(document.getElementById('playback-feed')), pixelX, pixelY);
-      anchorX = pixelX;
-      anchorY = pixelY;
-    }
-
-    // Resolves true once any of eventNames fires on target, or false if
-    // timeoutMs elapses first - lets callers treat "the browser never sent
-    // this event" (a real, observed Safari/iOS behavior) as a normal
-    // outcome to handle, rather than an unbounded wait.
-    function waitForEventOrTimeout(target, eventNames, timeoutMs) {
-      return new Promise((resolve) => {
-        const events = Array.isArray(eventNames) ? eventNames : [eventNames];
-        let settled = false;
-        const cleanup = () => {
-          events.forEach((name) => target.removeEventListener(name, onEvent));
-          clearTimeout(timer);
-        };
-        const onEvent = () => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve(true);
-        };
-        const timer = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve(false);
-        }, timeoutMs);
-        events.forEach((name) => target.addEventListener(name, onEvent));
-      });
-    }
-
-    // Best-effort only - Safari commonly reports a MediaRecorder-sourced
-    // video's duration as Infinity until force-seeked, and this workaround
-    // (seek near the end, let it recompute, seek back to 0) doesn't reliably
-    // fix that on every device. Used only to show a nicer "frame X/Y" total
-    // when it works - runAutomaticTracking's loop below does NOT depend on
-    // this succeeding, since relying on it left the loop unable to run at
-    // all the one time this was tested on a real iPhone.
-    async function resolveVideoDuration(video) {
-      if (isFinite(video.duration)) return;
-      video.currentTime = Number.MAX_SAFE_INTEGER;
-      await waitForEventOrTimeout(video, ['timeupdate', 'durationchange'], SEEK_TIMEOUT_MS);
-      video.currentTime = 0;
-      await waitForEventOrTimeout(video, 'seeked', SEEK_TIMEOUT_MS);
-    }
-
-    function showTagError(message) {
-      document.getElementById('tag-progress-pill').textContent = `⚠️ ${message} Tap ‹ to go back and try again.`;
-    }
-
-    // Generous safety cap on frame count, independent of video.duration
-    // (which can't be trusted - see resolveVideoDuration) - just to
-    // guarantee this loop can never run forever. 90s at 30fps is far
-    // longer than any real water rocket flight.
-    const MAX_TRACKED_FRAMES = 2700;
-
-    // Runs unattended from the seed tap to the end of the clip: steps one
-    // frame at a time, matches against the last good anchor, and either
-    // records a real point (confident) or "no observation" (not confident) -
-    // never a guess dressed up as a real sighting. A low-confidence frame
-    // keeps the last good anchor rather than clearing it, since there's no
-    // human left to re-tap and reacquire the rocket.
-    //
-    // End-of-clip is detected by whether currentTime actually advances
-    // after a seek, not by video.duration - Safari frequently never
-    // resolves a real duration for a MediaRecorder-sourced blob no matter
-    // what workaround is tried, and relying on it left this loop unable to
-    // run a single frame the one time this was tested on a real iPhone.
-    // Seeking past the true end clamps currentTime instead of erroring,
-    // which is what actually marks the end here.
-    async function runAutomaticTracking() {
-      const video = document.getElementById('playback-feed');
-      const pill = document.getElementById('tag-progress-pill');
-      const totalFrames = isFinite(video.duration) ? Math.floor(video.duration / FRAME_STEP_SECONDS) : null;
-
-      let lastTime = video.currentTime;
-      let frameNumber = 0;
-      let firstSeekLogged = false;
-
-      trackingDebugInfo.startTime = video.currentTime;
-
-      while (frameNumber < MAX_TRACKED_FRAMES) {
-        const seekTarget = lastTime + FRAME_STEP_SECONDS;
-        video.currentTime = seekTarget;
-        const seeked = await waitForEventOrTimeout(video, 'seeked', SEEK_TIMEOUT_MS);
-        if (!firstSeekLogged) {
-          trackingDebugInfo.firstSeekTarget = seekTarget;
-          trackingDebugInfo.firstSeekFired = seeked;
-          trackingDebugInfo.firstSeekLanded = video.currentTime;
-          trackingDebugInfo.firstSeekEnded = video.ended;
-          firstSeekLogged = true;
-        }
-        if (!seeked) break; // Stuck mid-clip - stop here and upload what we've got rather than hang.
-        if (video.ended || video.currentTime <= lastTime + 0.001) break; // Reached the real end.
-        lastTime = video.currentTime;
-
-        const imageData = grabFramePixels(video);
-        const best = findBestMatch(imageData, anchorPatch, anchorX, anchorY);
-        const confidence = best.sad / anchorPatch.length;
-        if (confidence < CONFIDENCE_SAD_THRESHOLD) {
-          recordObservation(best.x, best.y, 'automatic');
-          captureAnchor(best.x, best.y);
-        } else {
-          recordObservation(null, null);
-        }
-
-        frameNumber++;
-        pill.textContent = totalFrames
-          ? `🤖 Tracking… frame ${frameNumber}/${totalFrames}`
-          : `🤖 Tracking… frame ${frameNumber}`;
-      }
-
+      if (!orientationSampleIntervalId) return;
+      clearInterval(orientationSampleIntervalId);
+      orientationSampleIntervalId = null;
+      document.getElementById('recording-indicator').classList.remove('visible');
       enterUploadStep();
     }
 
-    function updateTagCounts() {
-      const tagged = taggedObservations.filter((o) => o.pixel_x != null).length;
-      document.getElementById('tag-progress-pill').textContent =
-        `${taggedObservations.length} processed, ${tagged} tracked`;
-    }
-
-    function recordObservation(pixelX, pixelY, observationSource, localTimestampMs) {
-      if (localTimestampMs === undefined) {
-        const video = document.getElementById('playback-feed');
-        localTimestampMs = Math.round(video.currentTime * 1000);
-      }
-      taggedObservations.push({
-        frame_index: nextFrameIndex++,
-        local_timestamp_ms: localTimestampMs,
-        pixel_x: pixelX,
-        pixel_y: pixelY,
-        observation_source: observationSource || 'manual',
-      });
-      updateTagCounts();
-    }
-
-    // --- Step 5: Upload ---
+    // --- Step 4: Upload ---
     async function enterUploadStep() {
       showStep('upload');
       const heading = document.getElementById('upload-heading');
@@ -962,9 +691,7 @@
       }
 
       const cached = JSON.parse(localStorage.getItem(storageKey));
-      const video = document.getElementById('playback-feed');
-      const trackedCount = taggedObservations.filter((o) => o.observation_source === 'automatic').length;
-      const skippedCount = taggedObservations.filter((o) => o.pixel_x == null).length;
+      const calibration = cached.latest_calibration || {};
       try {
         const res = await fetch('/api/optical/stations/observations/', {
           method: 'POST',
@@ -972,27 +699,22 @@
           body: JSON.stringify({
             device_token: cached.device_token,
             flight_number: currentFlightNumber,
-            image_width_px: video.videoWidth,
-            image_height_px: video.videoHeight,
-            observations: taggedObservations,
+            image_width_px: calibration.image_width_px,
+            image_height_px: calibration.image_height_px,
+            observations: orientationSamples.map((s) => ({ ...s, observation_source: 'orientation' })),
           }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'Upload failed.');
         heading.textContent = '✅ Uploaded!';
-        detail.textContent = `${data.frames} frames, ${data.pixels} tagged. ` +
-          `${trackedCount} tracked automatically, ${skippedCount} skipped (low confidence).`;
+        detail.textContent = `${data.pixels} of ${data.frames} orientation readings recorded.`;
       } catch (err) {
         heading.textContent = '⚠️ Upload failed';
         detail.textContent = err.message;
       }
 
-      detail.textContent += `\n\nDebug: ${JSON.stringify(trackingDebugInfo)}`;
-
-      taggedObservations = [];
+      orientationSamples = [];
       nextFrameIndex = 0;
-      trackingDebugInfo = {};
-      updateTagCounts();
       againBtn.style.display = 'block';
     }
 
@@ -1002,17 +724,13 @@
       readyBtn.disabled = true;
       readyBtn.textContent = "👉 Click Here to Report Ready";
       document.getElementById('recording-indicator').classList.remove('visible');
-      document.getElementById('record-hint').textContent = 'Tap the rocket on the pad to mark it, then report ready.';
+      document.getElementById('record-hint').textContent = 'Report ready, then keep the rocket centered in the crosshair for the whole flight.';
 
       // A camera could've been bumped between flights - require a fresh
       // aim-lock before the station can report ready again. Camera/motion
       // permission is already granted this page load, so the live view
       // just moves back to the Aim step rather than re-showing that gate.
-      // A new pad tap is required too, since the old seed position may no
-      // longer match the rocket's position under a different aim.
       mustReaimBeforeNextFlight = true;
-      seedPixelX = null;
-      seedPixelY = null;
       const liveView = document.getElementById('live-camera-view');
       if (liveView) document.getElementById('aim-camera-slot').appendChild(liveView);
       document.getElementById('aim-gate').style.display = 'none';

@@ -237,9 +237,10 @@ class TrackingStationDeleteView(APIView):
 
 
 class TrackingObservationUploadView(APIView):
-    """Batch upload of manually-tagged pixel observations for one flight.
-    The video itself never leaves the phone - only the tapped pixels and
-    their timestamps, matching the existing clinometer Sample upload's
+    """Batch upload of per-frame observations for one flight - either
+    tapped pixels (and the video itself never leaves the phone either
+    way) or, for orientation-tracked flights, a facing/pitch sample with
+    no pixel at all. Matches the existing clinometer Sample upload's
     'buffer locally, upload small derived data' pattern."""
 
     authentication_classes = []
@@ -288,17 +289,25 @@ class TrackingObservationUploadView(APIView):
 
             pixel_x = entry.get("pixel_x")
             pixel_y = entry.get("pixel_y")
-            if pixel_x is not None and pixel_y is not None:
+            facing_deg = entry.get("facing_deg")
+            pitch_deg = entry.get("pitch_deg")
+            has_pixel = pixel_x is not None and pixel_y is not None
+            has_orientation = facing_deg is not None and pitch_deg is not None
+            if has_pixel or has_orientation:
                 valid_sources = dict(PixelObservation.OBSERVATION_SOURCE_CHOICES)
                 observation_source = entry.get("observation_source")
                 if observation_source not in valid_sources:
-                    observation_source = PixelObservation.SOURCE_MANUAL
+                    observation_source = (
+                        PixelObservation.SOURCE_ORIENTATION if has_orientation else PixelObservation.SOURCE_MANUAL
+                    )
 
                 PixelObservation.objects.filter(frame=frame, is_current=True).update(is_current=False)
                 PixelObservation.objects.create(
                     frame=frame,
                     pixel_x=pixel_x,
                     pixel_y=pixel_y,
+                    facing_deg=facing_deg,
+                    pitch_deg=pitch_deg,
                     observation_source=observation_source,
                     valid=True,
                 )
