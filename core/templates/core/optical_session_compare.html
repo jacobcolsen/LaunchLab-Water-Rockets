@@ -137,6 +137,26 @@
 
     const PALETTE = [0x2dd4ee, 0xfb923c, 0xe879f9, 0x34d399, 0xfbbf24, 0xa78bfa];
 
+    // Metric/imperial display preference, set on the control page - read
+    // only here, no toggle UI on this page. See optical_control.html for
+    // the full rationale (a plain browser-level localStorage preference,
+    // converts read-only displays only).
+    const UNIT_STORAGE_KEY = 'optical-unit-system';
+    function getUnitSystem() {
+      return localStorage.getItem(UNIT_STORAGE_KEY) === 'imperial' ? 'imperial' : 'metric';
+    }
+    const M_TO_FT = 3.28084;
+    function formatLength(meters, decimals = 1) {
+      if (meters == null) return '—';
+      const imperial = getUnitSystem() === 'imperial';
+      return `${(imperial ? meters * M_TO_FT : meters).toFixed(decimals)} ${imperial ? 'ft' : 'm'}`;
+    }
+    function formatSpeed(metersPerSecond, decimals = 1) {
+      if (metersPerSecond == null) return '—';
+      const imperial = getUnitSystem() === 'imperial';
+      return `${(imperial ? metersPerSecond * M_TO_FT : metersPerSecond).toFixed(decimals)} ${imperial ? 'ft/s' : 'm/s'}`;
+    }
+
     // This app's ENU convention (x=east, y=north, z=up) maps onto
     // Three.js's default Y-up world as: three.x = east, three.y = up,
     // three.z = -north. Applied everywhere a server (x,y,z) is converted.
@@ -390,7 +410,7 @@
         return row;
       });
       const CATEGORIES = [
-        { key: 'estimated_altitude_m', label: '📏 Estimated Peak Altitude', unit: 'm' },
+        { key: 'estimated_altitude_m', label: '📏 Estimated Peak Altitude', format: formatLength },
         { key: 'highest_angle_deg', label: '⬆️ Highest Angle Reached', unit: '°' },
         { key: 'tracked_duration_s', label: '⏱ Longest Tracked', unit: 's' },
       ];
@@ -398,6 +418,11 @@
     }
 
     function renderCategoryLeaderboard(rows, categories, panelId) {
+      // A category either supplies its own format(value) (length/speed
+      // stats, unit-aware via the metric/imperial toggle) or a static
+      // unit string (angles/duration, always the same regardless).
+      const formatValue = (category, value) =>
+        category.format ? category.format(value) : `${value.toFixed(1)} ${category.unit}`;
       const panel = document.getElementById(panelId);
       panel.innerHTML = categories.map((category) => {
         const ranked = rows
@@ -419,13 +444,13 @@
               <span class="flight-swatch" style="background:${colorCss(winner.color)};"></span>
               <span class="winner-name">🏆 Flight #${winner.number}</span>
             </div>
-            <div class="winner-value">${winner[category.key].toFixed(1)} ${category.unit}</div>
+            <div class="winner-value">${formatValue(category, winner[category.key])}</div>
             ${runnersUp.length > 0 ? `
               <div class="runner-up-list">
                 ${runnersUp.map((row) => `
                   <div>
                     <span class="flight-swatch" style="background:${colorCss(row.color)};"></span>
-                    Flight #${row.number} — ${row[category.key].toFixed(1)} ${category.unit}
+                    Flight #${row.number} — ${formatValue(category, row[category.key])}
                   </div>
                 `).join('')}
               </div>
@@ -574,8 +599,8 @@
       }));
 
       const CATEGORIES = [
-        { key: 'apogee_height_m', label: '🚀 Highest Apogee', unit: 'm' },
-        { key: 'max_speed_m_s', label: '⚡ Fastest Speed', unit: 'm/s' },
+        { key: 'apogee_height_m', label: '🚀 Highest Apogee', format: formatLength },
+        { key: 'max_speed_m_s', label: '⚡ Fastest Speed', format: formatSpeed },
         { key: 'flight_duration_s', label: '⏱ Longest Flight Time', unit: 's' },
       ];
       renderCategoryLeaderboard(leaderboardRows, CATEGORIES, 'leaderboard-panel-3d');

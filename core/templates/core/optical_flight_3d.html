@@ -120,6 +120,25 @@
     const flightId = {{ flight_id }};
     const sessionId = {{ session_id|default:"null" }};
 
+    // Metric/imperial display preference, set on the control page - read
+    // only here, no toggle UI on this page. See optical_control.html for
+    // the full rationale. Only the text telemetry readouts below convert -
+    // the 3D scene's own Three.js coordinate space stays in meters, since
+    // it's an unlabeled visual grid with no on-screen unit text tied to it.
+    const UNIT_STORAGE_KEY = 'optical-unit-system';
+    function getUnitSystem() {
+      return localStorage.getItem(UNIT_STORAGE_KEY) === 'imperial' ? 'imperial' : 'metric';
+    }
+    const M_TO_FT = 3.28084;
+    function formatLength(meters, decimals = 1) {
+      const imperial = getUnitSystem() === 'imperial';
+      return `${(imperial ? meters * M_TO_FT : meters).toFixed(decimals)} ${imperial ? 'ft' : 'm'}`;
+    }
+    function formatSpeed(metersPerSecond, decimals = 1) {
+      const imperial = getUnitSystem() === 'imperial';
+      return `${(imperial ? metersPerSecond * M_TO_FT : metersPerSecond).toFixed(decimals)} ${imperial ? 'ft/s' : 'm/s'}`;
+    }
+
     const EVENT_COLORS = {
       launch: 0x34d399,
       burnout: 0xfb923c,
@@ -355,10 +374,10 @@
         trailGeometry.setDrawRange(0, index + 2);
 
         document.getElementById('tel-time').textContent = `${(clamped / 1000).toFixed(1)} s`;
-        document.getElementById('tel-height').textContent = `${position.y.toFixed(1)} m`;
-        document.getElementById('tel-speed').textContent = `${speed.toFixed(1)} m/s`;
+        document.getElementById('tel-height').textContent = formatLength(position.y);
+        document.getElementById('tel-speed').textContent = formatSpeed(speed);
         const distanceFromPad = Math.hypot(position.x, position.z);
-        document.getElementById('tel-distance').textContent = `${distanceFromPad.toFixed(1)} m`;
+        document.getElementById('tel-distance').textContent = formatLength(distanceFromPad);
 
         const statusEl = document.getElementById('telemetry-status');
         if (clamped >= totalDurationMs) {

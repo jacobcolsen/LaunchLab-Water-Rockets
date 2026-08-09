@@ -61,6 +61,15 @@
   <script>
     const flightId = {{ flight_id }};
 
+    // Metric/imperial display preference, set on the control page - read
+    // only here, no toggle UI on this page. See optical_control.html for
+    // the full rationale.
+    const UNIT_STORAGE_KEY = 'optical-unit-system';
+    function getUnitSystem() {
+      return localStorage.getItem(UNIT_STORAGE_KEY) === 'imperial' ? 'imperial' : 'metric';
+    }
+    const M_TO_FT = 3.28084;
+
     function drawChartAxes(ctx, { W, H, padding, minY, maxY, maxX, xLabel, yLabel, yUnit = '°' }) {
       ctx.strokeStyle = 'rgba(255,255,255,0.2)';
       ctx.lineWidth = 1;
@@ -213,13 +222,17 @@
       // to 0 at the low end so pre-liftoff aim-down noise doesn't show as
       // "negative altitude".
       if (station.surveyed_x_m != null && station.surveyed_y_m != null) {
+        const imperial = getUnitSystem() === 'imperial';
         const horizontalM = Math.hypot(station.surveyed_x_m, station.surveyed_y_m);
-        const altitudeSeries = station.series.map((p) => ({
-          timestamp_ms: p.timestamp_ms,
-          altitude_m: Math.max(0, horizontalM * Math.tan(p.elevation_deg * Math.PI / 180)),
-        }));
+        const altitudeSeries = station.series.map((p) => {
+          const altitudeM = Math.max(0, horizontalM * Math.tan(p.elevation_deg * Math.PI / 180));
+          return { timestamp_ms: p.timestamp_ms, altitude_m: imperial ? altitudeM * M_TO_FT : altitudeM };
+        });
         document.getElementById('altitude-card').style.display = 'block';
-        drawSeriesChart('altitude-chart', altitudeSeries, 'altitude_m', 'Estimated altitude (m)', '#34d399', 'm');
+        drawSeriesChart(
+          'altitude-chart', altitudeSeries, 'altitude_m',
+          `Estimated altitude (${imperial ? 'ft' : 'm'})`, '#34d399', imperial ? 'ft' : 'm'
+        );
       }
     }
 

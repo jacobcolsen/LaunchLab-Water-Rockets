@@ -10,6 +10,10 @@
     body { max-width: 720px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
     .top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; }
     .top-bar h1 { margin: 0; font-size: 1.5rem; }
+    #unit-toggle-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--text-muted);
+      border-radius: 999px; padding: 0.4rem 0.9rem; font-size: 0.85rem; cursor: pointer; flex-shrink: 0;
+    }
     .hint { color: var(--text-muted); margin-bottom: 1rem; }
     .card { margin-bottom: 1.5rem; }
     .card h2 { margin: 0 0 0.75rem; font-size: 1.1rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -181,6 +185,7 @@
 <body>
   <div class="top-bar">
     <h1>📷 Optical Tracking Control</h1>
+    <button type="button" id="unit-toggle-btn">📐 Metric</button>
   </div>
   <p class="hint">Parallel to normal Launch Control — this sets up multi-camera position tracking. No camera access happens yet in this step.</p>
 
@@ -382,6 +387,28 @@
       return div.innerHTML;
     }
 
+    // --- Metric/imperial display toggle - a plain browser-level
+    // preference (not tied to this session), so every optical page opened
+    // in this browser honors it, not just this one. Converts read-only
+    // displays only - never a data-entry field whose meters value gets
+    // typed elsewhere or submitted to the API as-is (Station Layout
+    // Helper's East/North table, the Validate form's Known X/Y/Z inputs).
+    const UNIT_STORAGE_KEY = 'optical-unit-system';
+    function getUnitSystem() {
+      return localStorage.getItem(UNIT_STORAGE_KEY) === 'imperial' ? 'imperial' : 'metric';
+    }
+    const M_TO_FT = 3.28084;
+    function formatLength(meters, decimals = 1) {
+      if (meters == null) return '—';
+      const imperial = getUnitSystem() === 'imperial';
+      return `${(imperial ? meters * M_TO_FT : meters).toFixed(decimals)} ${imperial ? 'ft' : 'm'}`;
+    }
+    function formatSpeed(metersPerSecond, decimals = 1) {
+      if (metersPerSecond == null) return '—';
+      const imperial = getUnitSystem() === 'imperial';
+      return `${(imperial ? metersPerSecond * M_TO_FT : metersPerSecond).toFixed(decimals)} ${imperial ? 'ft/s' : 'm/s'}`;
+    }
+
     if (!sessionId) {
       document.getElementById('create-session-form').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -429,7 +456,10 @@
         }
         if (station.position_source === 'surveyed_enu') {
           if (station.surveyed_x_m == null) return '—';
-          return `${station.surveyed_x_m.toFixed(1)}, ${station.surveyed_y_m.toFixed(1)}, ${station.surveyed_z_m.toFixed(1)} m`;
+          const imperial = getUnitSystem() === 'imperial';
+          const conv = (m) => imperial ? m * M_TO_FT : m;
+          return `${conv(station.surveyed_x_m).toFixed(1)}, ${conv(station.surveyed_y_m).toFixed(1)}, ` +
+            `${conv(station.surveyed_z_m).toFixed(1)} ${imperial ? 'ft' : 'm'}`;
         }
         return '—';
       }
@@ -728,6 +758,23 @@
       loadRoster();
       loadFlights();
 
+      // --- Metric/imperial toggle: flip the stored preference and
+      // immediately refresh whatever's already on screen, rather than
+      // requiring a reload or a modal close/reopen to see the change. ---
+      function updateUnitToggleLabel() {
+        document.getElementById('unit-toggle-btn').textContent =
+          getUnitSystem() === 'imperial' ? '📏 Imperial' : '📐 Metric';
+      }
+      updateUnitToggleLabel();
+      document.getElementById('unit-toggle-btn').addEventListener('click', () => {
+        localStorage.setItem(UNIT_STORAGE_KEY, getUnitSystem() === 'imperial' ? 'metric' : 'imperial');
+        updateUnitToggleLabel();
+        renderRoster(stationRoster);
+        if (document.getElementById('summary-modal').style.display === 'flex' && currentValidateFlightId) {
+          openFlightSummary(currentValidateFlightId, currentSummaryFlightNumber);
+        }
+      });
+
       // --- Flight Summary (Phase 14) ---
       function formatStat(value, unit, decimals = 1) {
         return value == null ? '—' : `${value.toFixed(decimals)}${unit}`;
@@ -736,7 +783,7 @@
       // Shared axis chart (gridlines, tick numbers, axis titles) - a
       // smaller analog of control.html's own drawChartAxes(), duplicated
       // here since page-specific scripts aren't shared via theme.css.
-      function drawChartAxes(ctx, { W, H, padding, maxX, maxY, xLabel, yLabel }) {
+      function drawChartAxes(ctx, { W, H, padding, maxX, maxY, xLabel, yLabel, yUnit = 'm' }) {
         ctx.strokeStyle = 'rgba(255,255,255,0.2)';
         ctx.lineWidth = 1;
         ctx.beginPath();
@@ -766,7 +813,7 @@
           ctx.stroke();
           ctx.fillStyle = '#93a0b8';
           ctx.textAlign = 'right';
-          ctx.fillText(`${(f * maxY).toFixed(0)}m`, padding - 8, y + 4);
+          ctx.fillText(`${(f * maxY).toFixed(0)}${yUnit}`, padding - 8, y + 4);
         }
 
         ctx.textAlign = 'center';
@@ -805,15 +852,22 @@
         ctx.clearRect(0, 0, W, H);
         if (!trajectory || trajectory.length === 0) return;
 
+        const imperial = getUnitSystem() === 'imperial';
         const t0 = trajectory[0].timestamp_ms;
-        const points = trajectory.map((p) => ({ t: (p.timestamp_ms - t0) / 1000, z: p.filtered_z_m }));
+        const points = trajectory.map((p) => ({
+          t: (p.timestamp_ms - t0) / 1000,
+          z: imperial ? p.filtered_z_m * M_TO_FT : p.filtered_z_m,
+        }));
         const maxT = Math.max(...points.map((p) => p.t)) || 1;
         const maxZ = Math.max(...points.map((p) => p.z)) || 1;
         const padding = 40;
         const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
         const yAt = (z) => H - padding - (z / maxZ) * (H - padding * 2);
 
-        drawChartAxes(ctx, { W, H, padding, maxX: maxT, maxY: maxZ, xLabel: 'Time (s)', yLabel: 'Height (m)' });
+        drawChartAxes(ctx, {
+          W, H, padding, maxX: maxT, maxY: maxZ, xLabel: 'Time (s)',
+          yLabel: `Height (${imperial ? 'ft' : 'm'})`, yUnit: imperial ? 'ft' : 'm',
+        });
 
         ctx.strokeStyle = '#2dd4ee';
         ctx.lineWidth = 2;
@@ -826,6 +880,7 @@
       }
 
       let currentValidateFlightId = null;
+      let currentSummaryFlightNumber = null;
 
       async function openFlightSummary(flightId, flightNumber) {
         const res = await fetch(`/api/optical/flights/${flightId}/summary/`);
@@ -833,6 +888,7 @@
         document.getElementById('summary-title').textContent = `Flight #${flightNumber} Summary`;
 
         currentValidateFlightId = flightId;
+        currentSummaryFlightNumber = flightNumber;
         document.getElementById('validate-form').reset();
         document.getElementById('validate-result').textContent = '';
         // Nothing to validate against without a computed 3D position -
@@ -843,14 +899,14 @@
         const stats = summary.stats || {};
         const landing = stats.landing_estimate || {};
         document.getElementById('summary-stat-grid').innerHTML = `
-          <div><span class="stat-label">Apogee Height</span><span class="stat-value">${formatStat(stats.apogee_height_m, ' m')}</span></div>
+          <div><span class="stat-label">Apogee Height</span><span class="stat-value">${formatLength(stats.apogee_height_m)}</span></div>
           <div><span class="stat-label">Time to Apogee</span><span class="stat-value">${formatStat(stats.time_to_apogee_s, ' s')}</span></div>
           <div><span class="stat-label">Flight Duration</span><span class="stat-value">${formatStat(stats.flight_duration_s, ' s')}</span></div>
-          <div><span class="stat-label">Max Ascent Rate</span><span class="stat-value">${formatStat(stats.ascent_rate_max_m_s, ' m/s')}</span></div>
-          <div><span class="stat-label">Max Descent Rate</span><span class="stat-value">${formatStat(stats.descent_rate_max_m_s, ' m/s')}</span></div>
-          <div><span class="stat-label">Max Speed</span><span class="stat-value">${formatStat(stats.max_speed_m_s, ' m/s')}</span></div>
-          <div><span class="stat-label">Drift at Apogee</span><span class="stat-value">${formatStat(stats.drift_at_apogee_m, ' m')}</span></div>
-          <div><span class="stat-label">Landing Distance</span><span class="stat-value">${formatStat(landing.distance_m, ' m')}</span></div>
+          <div><span class="stat-label">Max Ascent Rate</span><span class="stat-value">${formatSpeed(stats.ascent_rate_max_m_s)}</span></div>
+          <div><span class="stat-label">Max Descent Rate</span><span class="stat-value">${formatSpeed(stats.descent_rate_max_m_s)}</span></div>
+          <div><span class="stat-label">Max Speed</span><span class="stat-value">${formatSpeed(stats.max_speed_m_s)}</span></div>
+          <div><span class="stat-label">Drift at Apogee</span><span class="stat-value">${formatLength(stats.drift_at_apogee_m)}</span></div>
+          <div><span class="stat-label">Landing Distance</span><span class="stat-value">${formatLength(landing.distance_m)}</span></div>
         `;
 
         // Show the modal before measuring the canvas for the height
@@ -867,7 +923,7 @@
         document.getElementById('summary-quality-line').textContent = quality
           ? `3+ station coverage: ${quality.pct_three_station != null ? quality.pct_three_station.toFixed(0) : '—'}% · ` +
             `Outliers rejected: ${quality.num_outliers_rejected} · ` +
-            `Mean residual: ${quality.mean_residual_m != null ? quality.mean_residual_m.toFixed(2) : '—'} m`
+            `Mean residual: ${quality.mean_residual_m != null ? formatLength(quality.mean_residual_m, 2) : '—'}`
           : 'No quality metrics yet.';
 
         const limitationsEl = document.getElementById('summary-limitations');
@@ -1026,8 +1082,8 @@
         }
 
         resultEl.textContent =
-          `At ${(data.compared_timestamp_ms / 1000).toFixed(2)}s: horizontal error ${data.horizontal_error_m.toFixed(2)} m, ` +
-          `vertical error ${data.vertical_error_m.toFixed(2)} m, total error ${data.total_error_m.toFixed(2)} m.`;
+          `At ${(data.compared_timestamp_ms / 1000).toFixed(2)}s: horizontal error ${formatLength(data.horizontal_error_m, 2)}, ` +
+          `vertical error ${formatLength(data.vertical_error_m, 2)}, total error ${formatLength(data.total_error_m, 2)}.`;
       });
 
       document.getElementById('export-btn').addEventListener('click', async () => {
