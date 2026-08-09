@@ -186,10 +186,13 @@
       // happens to have data, just show the first - this page is scoped
       // to the "only 1 camera available" case.
       const station = stations[0];
+
+      // Show the container before measuring the canvases -
+      // sizeCanvasForDisplay needs their real, laid-out size, which a
+      // display:none ancestor reports as zero.
+      document.getElementById('charts-container').style.display = 'block';
       drawSeriesChart('elevation-chart', station.series, 'elevation_deg', 'Angle up (°)', '#2dd4ee');
       drawSeriesChart('azimuth-chart', station.series, 'azimuth_deg', 'Compass (°)', '#fb923c');
-
-      document.getElementById('charts-container').style.display = 'block';
     }
 
     main();
