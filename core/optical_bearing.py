@@ -49,6 +49,14 @@ def compute_bearing_series_for_flight(flight):
                 "station_id": station.id,
                 "label": station.label,
                 "series": points,
+                # A station's horizontal distance from the pad (ENU origin)
+                # is already known even with just 1 camera - lets the UI
+                # optionally derive an *estimated* altitude from elevation
+                # alone (altitude = horizontal_distance * tan(elevation)),
+                # under an explicit "flew straight up" assumption. Null
+                # when the station's position isn't known yet.
+                "surveyed_x_m": station.surveyed_x_m,
+                "surveyed_y_m": station.surveyed_y_m,
             }
         )
 

@@ -15,7 +15,20 @@
       border-bottom: 1px solid var(--border);
     }
     .top-bar h1 { margin: 0; font-size: 1.05rem; }
+    #mode-tabs { display: none; gap: 0.5rem; }
+    .mode-tab-btn {
+      background: transparent; border: 1px solid var(--border); color: var(--text-muted);
+      border-radius: 999px; padding: 0.4rem 0.9rem; font-size: 0.85rem; cursor: pointer;
+    }
+    .mode-tab-btn.active { background: var(--accent-cyan); border-color: var(--accent-cyan); color: #05070d; font-weight: 700; }
     #reset-view-btn { position: absolute; top: 4.2rem; right: 1.25rem; z-index: 10; }
+    .leaderboard-panel {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+      max-height: 13rem; overflow-y: auto;
+      gap: 1rem; flex-wrap: wrap;
+      padding: 0.85rem 1.25rem; background: rgba(20, 27, 45, 0.92);
+      border-top: 1px solid var(--border); display: none;
+    }
     #loading, #error-message {
       position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
       z-index: 10; color: var(--text-muted);
@@ -34,13 +47,6 @@
 
     #hint { position: absolute; bottom: 14.5rem; left: 1.25rem; z-index: 10; font-size: 0.85rem; }
 
-    #leaderboard-panel {
-      position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
-      max-height: 13rem; overflow-y: auto;
-      gap: 1rem; flex-wrap: wrap;
-      padding: 0.85rem 1.25rem; background: rgba(20, 27, 45, 0.92);
-      border-top: 1px solid var(--border); display: none;
-    }
     .category-card {
       flex: 1; min-width: 220px;
       background: var(--surface-elevated); border-radius: 14px;
@@ -80,24 +86,40 @@
 <body>
   <div class="top-bar">
     <h1>📊 Compare All Flights</h1>
+    <div id="mode-tabs">
+      <button type="button" class="mode-tab-btn" data-mode="3d">🌐 3D Trajectories</button>
+      <button type="button" class="mode-tab-btn" data-mode="bearing">🧭 Direction Only</button>
+    </div>
   </div>
-  <button type="button" id="reset-view-btn" class="btn btn-secondary">Reset View</button>
-  <div id="legend-panel"></div>
-  <p id="hint" class="hint">Drag to orbit · Scroll or pinch to zoom</p>
   <p id="loading">Loading flights…</p>
   <p id="error-message"></p>
 
-  <div id="bearing-chart-container">
-    <div class="explainer">
-      Only 1 camera tracked these flights, so we can't show real 3D
-      positions - just the direction each camera pointed over time. Higher
-      on this chart means the rocket looked higher in the sky.
-    </div>
-    <div id="bearing-legend"></div>
-    <canvas id="bearing-chart-canvas" width="900" height="400"></canvas>
+  <!-- Two independent panels, one per flight category (2+ stations vs
+       exactly 1) - never mixed together, since a real trajectory and a
+       direction-only reading aren't comparable data. Both stay in the DOM
+       simultaneously (never torn down/rebuilt on tab switch) - mode-tabs
+       above just toggles which one is visible, and both are rendered
+       while visible so their canvases size correctly before either gets
+       hidden (see main()). -->
+  <div id="mode-3d">
+    <button type="button" id="reset-view-btn" class="btn btn-secondary">Reset View</button>
+    <div id="legend-panel"></div>
+    <p id="hint" class="hint">Drag to orbit · Scroll or pinch to zoom</p>
+    <div id="leaderboard-panel-3d" class="leaderboard-panel"></div>
   </div>
 
-  <div id="leaderboard-panel"></div>
+  <div id="mode-bearing">
+    <div id="bearing-chart-container">
+      <div class="explainer">
+        Only 1 camera tracked these flights, so we can't show real 3D
+        positions - just the direction each camera pointed over time. Higher
+        on this chart means the rocket looked higher in the sky.
+      </div>
+      <div id="bearing-legend"></div>
+      <canvas id="bearing-chart-canvas" width="900" height="400"></canvas>
+    </div>
+    <div id="leaderboard-panel-bearing" class="leaderboard-panel"></div>
+  </div>
 
   <script type="importmap">
     {
@@ -153,15 +175,51 @@
         return;
       }
 
-      // Sensor-limited gating: with only 1 camera, no 3D position can be
-      // computed at all (see core/optical_rays.py) - render the
-      // direction-only comparison instead of an empty 3D scene.
-      if (stations.length === 1) {
-        await renderBearingComparison(flights);
-      } else {
-        await render3dComparison(flights, stations);
+      // Per-flight gating, not session-wide: how many stations actually
+      // tracked EACH flight (tracking_station_count) - a session can mix
+      // flights that had full multi-station coverage with flights that
+      // only had 1 station reporting, and those two kinds of data are
+      // never comparable, so they render as two independent panels
+      // (#mode-3d / #mode-bearing) rather than ever being shown together.
+      const fullFlights = flights.filter((f) => f.tracking_station_count >= 2);
+      const bearingFlights = flights.filter((f) => f.tracking_station_count === 1);
+      const has3d = fullFlights.length > 0;
+      const hasBearing = bearingFlights.length > 0;
+
+      if (!has3d && !hasBearing) {
+        document.getElementById('loading').style.display = 'none';
+        const errEl = document.getElementById('error-message');
+        errEl.textContent = 'None of this session\'s flights have tracking data yet.';
+        errEl.style.display = 'block';
+        return;
       }
+
+      // Both panels stay visible while being built - sizeCanvasForDisplay
+      // needs each canvas's real, laid-out size, which a display:none
+      // ancestor would report as zero. Final visibility is only decided
+      // once both are done rendering, below.
+      if (has3d) await render3dComparison(fullFlights, stations);
+      if (hasBearing) await renderBearingComparison(bearingFlights);
+
+      if (has3d && hasBearing) {
+        document.getElementById('mode-tabs').style.display = 'flex';
+        document.querySelectorAll('.mode-tab-btn').forEach((btn) => {
+          btn.addEventListener('click', () => setActiveMode(btn.dataset.mode));
+        });
+        setActiveMode('3d');
+      } else {
+        setActiveMode(has3d ? '3d' : 'bearing');
+      }
+
       document.getElementById('loading').style.display = 'none';
+    }
+
+    function setActiveMode(mode) {
+      document.getElementById('mode-3d').style.display = mode === '3d' ? 'block' : 'none';
+      document.getElementById('mode-bearing').style.display = mode === 'bearing' ? 'block' : 'none';
+      document.querySelectorAll('.mode-tab-btn').forEach((btn) => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+      });
     }
 
     function drawChartAxes2d(ctx, { W, H, padding, minY, maxY, maxX, xLabel, yLabel }) {
@@ -243,10 +301,6 @@
     }
 
     async function renderBearingComparison(flights) {
-      // No 3D camera exists in this mode - hide the controls that assume one.
-      document.getElementById('reset-view-btn').style.display = 'none';
-      document.getElementById('hint').style.display = 'none';
-
       const entries = [];
       for (let i = 0; i < flights.length; i++) {
         const flight = flights[i];
@@ -258,7 +312,10 @@
         }
         const station = (bearingData.stations || [])[0];
         if (!station || station.series.length === 0) continue;
-        entries.push({ flight, series: station.series, color: PALETTE[i % PALETTE.length] });
+        entries.push({
+          flight, series: station.series, color: PALETTE[i % PALETTE.length],
+          surveyedXM: station.surveyed_x_m, surveyedYM: station.surveyed_y_m,
+        });
       }
 
       if (entries.length === 0) {
@@ -312,26 +369,36 @@
         ctx.stroke();
       });
 
-      // --- Leaderboard: 2 categories computable from direction alone ---
+      // --- Leaderboard: categories computable from direction alone, plus
+      // an estimated peak altitude where a station's position is known
+      // (same "assumes a vertical flight path" estimate as the single-
+      // flight Direction View page - altitude = horizontal_distance *
+      // tan(elevation), an assumption-based estimate, not a measurement). ---
       const rows = entries.map((entry) => {
         const values = entry._points.map((p) => p.v);
         const times = entry._points.map((p) => p.t);
-        return {
+        const row = {
           number: entry.flight.number,
           color: entry.color,
           highest_angle_deg: Math.max(...values),
           tracked_duration_s: Math.max(...times) - Math.min(...times),
         };
+        if (entry.surveyedXM != null && entry.surveyedYM != null) {
+          const horizontalM = Math.hypot(entry.surveyedXM, entry.surveyedYM);
+          row.estimated_altitude_m = Math.max(0, horizontalM * Math.tan(row.highest_angle_deg * Math.PI / 180));
+        }
+        return row;
       });
       const CATEGORIES = [
+        { key: 'estimated_altitude_m', label: '📏 Estimated Peak Altitude', unit: 'm' },
         { key: 'highest_angle_deg', label: '⬆️ Highest Angle Reached', unit: '°' },
         { key: 'tracked_duration_s', label: '⏱ Longest Tracked', unit: 's' },
       ];
-      renderCategoryLeaderboard(rows, CATEGORIES);
+      renderCategoryLeaderboard(rows, CATEGORIES, 'leaderboard-panel-bearing');
     }
 
-    function renderCategoryLeaderboard(rows, categories) {
-      const panel = document.getElementById('leaderboard-panel');
+    function renderCategoryLeaderboard(rows, categories, panelId) {
+      const panel = document.getElementById(panelId);
       panel.innerHTML = categories.map((category) => {
         const ranked = rows
           .filter((row) => row[category.key] != null)
@@ -421,7 +488,9 @@
       const renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setPixelRatio(window.devicePixelRatio);
       renderer.setSize(window.innerWidth, window.innerHeight);
-      document.body.appendChild(renderer.domElement);
+      // Appended inside #mode-3d (not document.body) so hiding that
+      // container for the "Direction Only" tab also hides this canvas.
+      document.getElementById('mode-3d').appendChild(renderer.domElement);
 
       const controls = new OrbitControls(camera, renderer.domElement);
       controls.target.set(0, maxHeight * 0.3, 0);
@@ -509,7 +578,7 @@
         { key: 'max_speed_m_s', label: '⚡ Fastest Speed', unit: 'm/s' },
         { key: 'flight_duration_s', label: '⏱ Longest Flight Time', unit: 's' },
       ];
-      renderCategoryLeaderboard(leaderboardRows, CATEGORIES);
+      renderCategoryLeaderboard(leaderboardRows, CATEGORIES, 'leaderboard-panel-3d');
     }
 
     main();

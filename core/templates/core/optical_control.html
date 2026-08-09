@@ -468,13 +468,11 @@
         });
       }
 
-      let stationCount = 0;
       let stationRoster = [];
 
       async function loadRoster() {
         const res = await fetch(`/api/optical/sessions/${sessionId}/stations/`);
         const stations = await res.json();
-        stationCount = stations.length;
         stationRoster = stations;
         renderRoster(stations);
       }
@@ -488,12 +486,21 @@
           body.innerHTML = '<tr><td colspan="2">No flights yet - tap New Flight before the first launch attempt.</td></tr>';
           return;
         }
-        // Sensor-limited gating: with only 1 camera, no 3D position can be
-        // computed at all (see core/optical_rays.py), so send the operator
-        // to the direction-only view instead of a dead-end 3D page.
-        const secondButton = (f) => stationCount === 1
-          ? `<a href="/optical/flights/${f.id}/direction?session=${sessionId}" target="_blank" rel="noopener" class="btn btn-secondary">🧭 Direction View</a>`
-          : `<a href="/optical/flights/${f.id}/3d?session=${sessionId}" target="_blank" rel="noopener" class="btn btn-secondary">🌐 3D View</a>`;
+        // Per-flight gating, not session-wide: how many stations actually
+        // tracked THIS flight (tracking_station_count, from
+        // core.optical_rays.stations_with_bearing_data) - a session can
+        // have several stations registered overall while only one of them
+        // reported for a given flight, so the session's total station
+        // count was never the right signal here.
+        const secondButton = (f) => {
+          if (f.tracking_station_count >= 2) {
+            return `<a href="/optical/flights/${f.id}/3d?session=${sessionId}" target="_blank" rel="noopener" class="btn btn-secondary">🌐 3D View</a>`;
+          }
+          if (f.tracking_station_count === 1) {
+            return `<a href="/optical/flights/${f.id}/direction?session=${sessionId}" target="_blank" rel="noopener" class="btn btn-secondary">🧭 Direction View</a>`;
+          }
+          return '';
+        };
         body.innerHTML = flights.map((f) => `
           <tr>
             <td>Flight #${f.number}${f.name ? ` — ${escapeHtml(f.name)}` : ''}</td>
@@ -718,9 +725,8 @@
         });
       }
 
-      // Roster must load first so stationCount is known before the
-      // Flights table renders its (station-count-gated) action buttons.
-      loadRoster().then(loadFlights);
+      loadRoster();
+      loadFlights();
 
       // --- Flight Summary (Phase 14) ---
       function formatStat(value, unit, decimals = 1) {

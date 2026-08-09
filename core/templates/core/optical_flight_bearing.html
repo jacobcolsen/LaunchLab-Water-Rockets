@@ -12,6 +12,7 @@
     .top-bar h1 { margin: 0; font-size: 1.4rem; }
     .card { margin-bottom: 1.5rem; }
     .card h2 { margin: 0 0 0.5rem; font-size: 1rem; color: var(--text-muted); }
+    .hint { color: var(--text-muted); font-size: 0.85rem; }
     .explainer {
       background: rgba(45, 212, 238, 0.1); border: 1px solid rgba(45, 212, 238, 0.3);
       border-radius: 12px; padding: 0.85rem 1rem; margin-bottom: 1.5rem; font-size: 0.95rem;
@@ -43,6 +44,17 @@
     <div class="card">
       <h2>🧭 Which way was it pointing? (compass direction)</h2>
       <canvas id="azimuth-chart" width="640" height="240"></canvas>
+    </div>
+    <div class="card" id="altitude-card" style="display:none;">
+      <h2>📏 Estimated Altitude</h2>
+      <p class="hint" style="margin:0 0 0.25rem;">
+        Assumes the rocket flew straight up from the pad, with no
+        sideways drift - a real guess, not a measurement. Combines the
+        angle above with how far this camera is from the pad. Trust it
+        least near the ground (right after liftoff and right before
+        landing) and most near the peak.
+      </p>
+      <canvas id="altitude-chart" width="640" height="240"></canvas>
     </div>
   </div>
 
@@ -193,6 +205,22 @@
       document.getElementById('charts-container').style.display = 'block';
       drawSeriesChart('elevation-chart', station.series, 'elevation_deg', 'Angle up (°)', '#2dd4ee');
       drawSeriesChart('azimuth-chart', station.series, 'azimuth_deg', 'Compass (°)', '#fb923c');
+
+      // Estimated altitude: only possible once this station's own position
+      // is known (surveyed_x_m/y_m) - a single bearing alone has no
+      // distance, so this assumes the rocket flew straight up from the pad
+      // and derives altitude = horizontal_distance * tan(elevation). Clamped
+      // to 0 at the low end so pre-liftoff aim-down noise doesn't show as
+      // "negative altitude".
+      if (station.surveyed_x_m != null && station.surveyed_y_m != null) {
+        const horizontalM = Math.hypot(station.surveyed_x_m, station.surveyed_y_m);
+        const altitudeSeries = station.series.map((p) => ({
+          timestamp_ms: p.timestamp_ms,
+          altitude_m: Math.max(0, horizontalM * Math.tan(p.elevation_deg * Math.PI / 180)),
+        }));
+        document.getElementById('altitude-card').style.display = 'block';
+        drawSeriesChart('altitude-chart', altitudeSeries, 'altitude_m', 'Estimated altitude (m)', '#34d399');
+      }
     }
 
     main();

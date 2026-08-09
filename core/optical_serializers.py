@@ -14,6 +14,7 @@ from .optical_models import (
     TrajectoryPoint,
     TriangulatedPoint,
 )
+from .optical_rays import stations_with_bearing_data
 
 SCHEMA_VERSION = "1.0"
 
@@ -24,9 +25,19 @@ CONNECTION_STALE_SECONDS = 15
 
 
 class TrackingFlightSerializer(serializers.ModelSerializer):
+    # How many stations actually tracked THIS flight (2+ usable
+    # observations each) - not the session's total registered station
+    # count, which is what the UI used to (wrongly) key off of to decide
+    # between a real 3D view and a direction-only one. See
+    # core.optical_rays.stations_with_bearing_data.
+    tracking_station_count = serializers.SerializerMethodField()
+
     class Meta:
         model = TrackingFlight
-        fields = ["id", "number", "name", "created_at"]
+        fields = ["id", "number", "name", "created_at", "tracking_station_count"]
+
+    def get_tracking_station_count(self, obj):
+        return len(stations_with_bearing_data(obj))
 
 
 class StationCalibrationSerializer(serializers.ModelSerializer):

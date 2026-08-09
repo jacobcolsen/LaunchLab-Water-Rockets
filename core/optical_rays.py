@@ -91,6 +91,24 @@ def _interp_bearing_series(series, grid_times):
     return results
 
 
+def stations_with_bearing_data(flight):
+    """Stations (from this flight's session) with an active calibration, a
+    known ENU position, and 2+ usable (valid, current, synchronized)
+    bearing observations for this specific flight - the actual per-flight
+    coverage, not just how many stations are registered in the session.
+    Used both to decide whether a flight qualifies for real triangulation
+    (generate_rays_for_flight, below) and to tell the UI which comparison
+    mode a given flight actually belongs in (core/optical_serializers.py's
+    tracking_station_count)."""
+    stations = [
+        s
+        for s in flight.session.stations.all()
+        if s.calibrations.filter(is_active=True).exists()
+        and None not in (s.surveyed_x_m, s.surveyed_y_m, s.surveyed_z_m)
+    ]
+    return [s for s in stations if len(station_bearing_series(s, flight)) >= 2]
+
+
 def generate_rays_for_flight(flight):
     """Returns a list of {"synchronized_timestamp_ms": t, "rays": [(station,
     origin, direction), ...]} entries spanning the overlapping time range
@@ -100,21 +118,13 @@ def generate_rays_for_flight(flight):
     internal gaps (skipped frames) are preserved, not filled in. Whether
     a given timestep has "enough" rays to solve is Phase 7's decision,
     not this function's - it returns whatever coverage actually exists."""
-    stations = [
-        s
-        for s in flight.session.stations.all()
-        if s.calibrations.filter(is_active=True).exists()
-        and None not in (s.surveyed_x_m, s.surveyed_y_m, s.surveyed_z_m)
-    ]
-
-    series_by_station = {}
-    for station in stations:
-        series = station_bearing_series(station, flight)
-        if len(series) >= 2:
-            series_by_station[station.id] = (station, series)
-
-    if len(series_by_station) < 2:
+    qualifying_stations = stations_with_bearing_data(flight)
+    if len(qualifying_stations) < 2:
         return []
+
+    series_by_station = {
+        station.id: (station, station_bearing_series(station, flight)) for station in qualifying_stations
+    }
 
     starts = [series[0][0] for _, series in series_by_station.values()]
     ends = [series[-1][0] for _, series in series_by_station.values()]
