@@ -37,14 +37,6 @@
   <p id="error-message"></p>
 
   <div id="charts-container" style="display:none;">
-    <div class="card">
-      <h2>⬆️ How high did it look? (angle above the ground)</h2>
-      <canvas id="elevation-chart" width="640" height="240"></canvas>
-    </div>
-    <div class="card">
-      <h2>🧭 Which way was it pointing? (compass direction)</h2>
-      <canvas id="azimuth-chart" width="640" height="240"></canvas>
-    </div>
     <div class="card" id="altitude-card" style="display:none;">
       <h2>📏 Estimated Altitude</h2>
       <p class="hint" style="margin:0 0 0.25rem;">
@@ -56,12 +48,20 @@
       </p>
       <canvas id="altitude-chart" width="640" height="240"></canvas>
     </div>
+    <div class="card">
+      <h2>⬆️ How high did it look? (angle above the ground)</h2>
+      <canvas id="elevation-chart" width="640" height="240"></canvas>
+    </div>
+    <div class="card">
+      <h2>🧭 Which way was it pointing? (compass direction)</h2>
+      <canvas id="azimuth-chart" width="640" height="240"></canvas>
+    </div>
   </div>
 
   <script>
     const flightId = {{ flight_id }};
 
-    function drawChartAxes(ctx, { W, H, padding, minY, maxY, maxX, xLabel, yLabel }) {
+    function drawChartAxes(ctx, { W, H, padding, minY, maxY, maxX, xLabel, yLabel, yUnit = '°' }) {
       ctx.strokeStyle = 'rgba(255,255,255,0.2)';
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -92,7 +92,7 @@
         ctx.stroke();
         ctx.fillStyle = '#93a0b8';
         ctx.textAlign = 'right';
-        ctx.fillText(`${value.toFixed(0)}°`, padding - 8, y + 4);
+        ctx.fillText(`${value.toFixed(0)}${yUnit}`, padding - 8, y + 4);
       }
 
       ctx.textAlign = 'center';
@@ -137,7 +137,7 @@
       return { ctx, W: rect.width, H: rect.height };
     }
 
-    function drawSeriesChart(canvasId, series, valueKey, yLabel, color) {
+    function drawSeriesChart(canvasId, series, valueKey, yLabel, color, yUnit = '°') {
       const canvas = document.getElementById(canvasId);
       const { ctx, W, H } = sizeCanvasForDisplay(canvas);
       ctx.clearRect(0, 0, W, H);
@@ -157,7 +157,7 @@
       const xAt = (t) => padding + (t / maxT) * (W - padding * 2);
       const yAt = (v) => H - padding - ((v - minY) / (maxY - minY)) * (H - padding * 2);
 
-      drawChartAxes(ctx, { W, H, padding, minY, maxY, maxX: maxT, xLabel: 'Time (s)', yLabel });
+      drawChartAxes(ctx, { W, H, padding, minY, maxY, maxX: maxT, xLabel: 'Time (s)', yLabel, yUnit });
 
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
@@ -219,7 +219,7 @@
           altitude_m: Math.max(0, horizontalM * Math.tan(p.elevation_deg * Math.PI / 180)),
         }));
         document.getElementById('altitude-card').style.display = 'block';
-        drawSeriesChart('altitude-chart', altitudeSeries, 'altitude_m', 'Estimated altitude (m)', '#34d399');
+        drawSeriesChart('altitude-chart', altitudeSeries, 'altitude_m', 'Estimated altitude (m)', '#34d399', 'm');
       }
     }
 
