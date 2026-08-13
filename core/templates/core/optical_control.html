@@ -155,6 +155,19 @@
       padding: 0.6rem 0; border-bottom: 1px solid var(--border);
     }
     #station-checklist .checklist-row:last-child { border-bottom: none; }
+    #safety-checklist { margin-top: 1.5rem; }
+    #safety-checklist .checklist-heading {
+      font-weight: 700; font-size: 0.9rem; color: var(--text-muted); margin: 0 0 0.5rem;
+    }
+    .safety-check-row {
+      display: flex; align-items: center; gap: 0.75rem;
+      padding: 0.7rem 0.2rem; border-bottom: 1px solid var(--border);
+      font-size: 0.95rem; cursor: pointer;
+    }
+    .safety-check-row:last-child { border-bottom: none; }
+    .safety-check-row input[type="checkbox"] {
+      width: 22px; height: 22px; flex-shrink: 0; accent-color: var(--accent-cyan); cursor: pointer;
+    }
     .prepare-actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
     .prepare-actions .btn { flex: 1; }
     #begin-countdown-btn {
@@ -263,9 +276,18 @@
         <label for="flight-name-input" style="font-weight:700; font-size:0.9rem; color:var(--text-muted);">Flight name (optional)</label>
         <input type="text" id="flight-name-input" placeholder="e.g. Big Blue Booster" style="margin-top:0.3rem;">
         <div id="station-checklist"></div>
+        <div id="safety-checklist">
+          <p class="checklist-heading">🛡️ Go/No-Go Checklist</p>
+          <label class="safety-check-row"><input type="checkbox" class="safety-check"> Water loaded — correct amount</label>
+          <label class="safety-check-row"><input type="checkbox" class="safety-check"> Rocket secured — firmly attached to launcher</label>
+          <label class="safety-check-row"><input type="checkbox" class="safety-check"> Pressure good — do NOT exceed the 90 PSI launch pressure</label>
+          <label class="safety-check-row"><input type="checkbox" class="safety-check"> Launch area CLEAR — nobody near the pad</label>
+          <label class="safety-check-row"><input type="checkbox" class="safety-check"> Everyone behind the safety line</label>
+          <label class="safety-check-row"><input type="checkbox" class="safety-check"> CALL tracking stations "READY!?"</label>
+        </div>
         <div class="prepare-actions">
           <button type="button" id="cancel-prepare-btn" class="btn btn-secondary">Cancel</button>
-          <button type="button" id="begin-countdown-btn" class="btn">▶ Begin Countdown</button>
+          <button type="button" id="begin-countdown-btn" class="btn" disabled>▶ Begin Countdown</button>
         </div>
       </div>
     </div>
@@ -648,6 +670,16 @@
         });
       }
 
+      // Begin Countdown stays disabled until every go/no-go box is
+      // checked - a real safety gate, not just a reminder list.
+      function updateBeginCountdownGate() {
+        const boxes = document.querySelectorAll('.safety-check');
+        const allChecked = Array.from(boxes).every((box) => box.checked);
+        document.getElementById('begin-countdown-btn').disabled = !allChecked;
+      }
+
+      document.getElementById('safety-checklist').addEventListener('change', updateBeginCountdownGate);
+
       function openPreparePanel() {
         // Deliberately does NOT clear readyStationIds - a station can
         // report ready any time after reaching its Record step, not just
@@ -657,6 +689,11 @@
         // that's the real "this round is consumed" moment.
         document.getElementById('flight-name-input').value = '';
         renderStationChecklist();
+        // The safety checklist, unlike station readiness, resets every
+        // time - a box checked for a previous flight shouldn't silently
+        // satisfy this one.
+        document.querySelectorAll('.safety-check').forEach((box) => { box.checked = false; });
+        updateBeginCountdownGate();
         document.getElementById('prepare-overlay').classList.add('visible');
       }
 
