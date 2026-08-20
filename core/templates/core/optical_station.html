@@ -80,6 +80,16 @@
     }
     #flight-pill { color: var(--text-primary); font-weight: 700; }
 
+    /* Deliberately visible, unlike the rest of this page's ceremony UI -
+       a kid should be able to notice a dropped connection instead of it
+       happening invisibly (see connectCountdownSocket()). */
+    #connection-status-pill {
+      position: fixed; top: 0.75rem; right: 0.75rem; z-index: 30;
+      background: rgba(11,15,26,0.85); padding: 0.3rem 0.75rem; border-radius: 999px;
+      font-size: 0.8rem; font-weight: 700; color: var(--text-primary);
+      pointer-events: none; white-space: nowrap;
+    }
+
     #step-aim, #step-record { padding: 0; }
     #aim-gate, #aim-lock-row, #record-controls-row {
       position: absolute; left: 0; right: 0; bottom: 2.5rem; z-index: 5;
@@ -182,6 +192,12 @@
       <div id="station-countdown-content"></div>
     </div>
 
+    <!-- Persistent across every step (not inside a .step div, so showStep()
+         never hides it) - the countdown socket connects at page load
+         regardless of which step is showing, so its status should always
+         be visible, not just on the Record step. -->
+    <div id="connection-status-pill">🟡 Connecting…</div>
+
     <!-- Step 1: Position -->
     <div id="step-position" class="step">
       <div class="step-icon">📍</div>
@@ -246,6 +262,7 @@
       <div class="step-icon" id="upload-icon">⬆️</div>
       <h1 id="upload-heading">Uploading…</h1>
       <p id="upload-detail" class="hint"></p>
+      <button type="button" id="retry-upload-btn" class="big-action-btn" style="display:none;">🔄 Retry Upload</button>
       <button type="button" id="record-another-btn" class="big-action-btn" style="display:none;">🔄 Record Another Flight</button>
     </div>
 
@@ -346,20 +363,41 @@
       }
     }
 
-    const RECONNECT_DELAY_MS = 3000;
+    // Exponential backoff with jitter, not a flat delay - recovers faster
+    // from a brief blip than a flat 3s ever could (starts near-instant),
+    // while not hammering the server if the outage is real and sustained.
+    // Jitter matters specifically here since every station shares the same
+    // field WiFi - without it, a shared network hiccup would have every
+    // phone retrying in exact lockstep.
+    const RECONNECT_MIN_DELAY_MS = 500;
+    const RECONNECT_MAX_DELAY_MS = 10000;
+    let reconnectDelayMs = RECONNECT_MIN_DELAY_MS;
+
+    function updateConnectionStatusPill(state) {
+      const pill = document.getElementById('connection-status-pill');
+      if (state === 'connected') pill.textContent = '🟢 Connected';
+      else if (state === 'reconnecting') pill.textContent = '🟡 Reconnecting…';
+    }
 
     // A dropped connection (network hiccup, phone backgrounded and the OS
     // killed it, etc.) shouldn't need a manual page reload to recover -
     // this reconnects on its own and re-identifies immediately, so
     // "connected" comes back green without the operator doing anything
-    // beyond just having the page open again. No visible "reconnecting…"
-    // UI - kept invisible, same as everywhere else on this page.
+    // beyond just having the page open again.
     function connectCountdownSocket() {
       const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
       countdownSocket = new WebSocket(`${wsProtocol}://${window.location.host}/ws/optical/sessions/${sessionId}/`);
-      countdownSocket.addEventListener('open', sendIdentify);
+      countdownSocket.addEventListener('open', () => {
+        reconnectDelayMs = RECONNECT_MIN_DELAY_MS;
+        updateConnectionStatusPill('connected');
+        sendIdentify();
+        attemptSendReportReady();
+      });
       countdownSocket.addEventListener('close', () => {
-        setTimeout(connectCountdownSocket, RECONNECT_DELAY_MS);
+        updateConnectionStatusPill('reconnecting');
+        const jitter = reconnectDelayMs * (0.8 + Math.random() * 0.4);
+        setTimeout(connectCountdownSocket, jitter);
+        reconnectDelayMs = Math.min(reconnectDelayMs * 2, RECONNECT_MAX_DELAY_MS);
       });
       countdownSocket.onmessage = (event) => {
         const message = JSON.parse(event.data);
@@ -371,6 +409,17 @@
         } else if (message.type === 'flight_landed') {
           showTouchdownCelebration();
           autoStopRecording();
+        } else if (message.type === 'flight_state_sync') {
+          // Catches this station up after reconnecting/identifying mid-
+          // session, in case it missed the live countdown_start or
+          // flight_landed broadcast entirely while disconnected. No
+          // countdown animation replay here (runStationCountdown()) - if a
+          // flight may already be underway, the "get ready" cue would be
+          // actively misleading. autoStartRecording/autoStopRecording are
+          // both safe to call unconditionally - each is a no-op if this
+          // station's local state already matches.
+          if (message.recording_active) autoStartRecording();
+          else autoStopRecording();
         }
       };
     }
@@ -379,18 +428,35 @@
       connectCountdownSocket();
     }
 
-    document.getElementById('report-ready-btn').addEventListener('click', () => {
+    // Queued rather than fire-and-forget: a tap while the socket happens to
+    // be down used to silently do nothing while the button still claimed
+    // success ("🚀 Standby for Launch") regardless - now it stays pending
+    // and visibly so, and connectCountdownSocket's open handler flushes it
+    // automatically the instant the connection comes back.
+    let reportReadyPending = false;
+
+    function attemptSendReportReady() {
+      if (!reportReadyPending) return;
       const cached = JSON.parse(localStorage.getItem(storageKey) || 'null');
+      const btn = document.getElementById('report-ready-btn');
       if (countdownSocket && countdownSocket.readyState === WebSocket.OPEN && cached) {
         countdownSocket.send(JSON.stringify({
           type: 'station_ready',
           station_id: cached.id,
           label: cached.label,
         }));
+        reportReadyPending = false;
+        btn.disabled = true;
+        btn.textContent = "🚀 Standby for Launch";
+      } else {
+        btn.disabled = true;
+        btn.textContent = "⏳ Connecting… will send when ready";
       }
-      const btn = document.getElementById('report-ready-btn');
-      btn.disabled = true;
-      btn.textContent = "🚀 Standby for Launch";
+    }
+
+    document.getElementById('report-ready-btn').addEventListener('click', () => {
+      reportReadyPending = true;
+      attemptSendReportReady();
     });
 
     // --- Step 1: Position ---
@@ -674,14 +740,40 @@
     }
 
     // --- Step 4: Upload ---
+    // A few retries with backoff before giving up - this is the one HTTP
+    // call carrying the actual flight data, and a flaky connection is
+    // exactly the kind of thing that makes a single attempt unreliable.
+    const UPLOAD_RETRY_DELAYS_MS = [0, 2000, 4000];
+
+    async function attemptUpload() {
+      const cached = JSON.parse(localStorage.getItem(storageKey));
+      const calibration = cached.latest_calibration || {};
+      const res = await fetch('/api/optical/stations/observations/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          device_token: cached.device_token,
+          flight_number: currentFlightNumber,
+          image_width_px: calibration.image_width_px,
+          image_height_px: calibration.image_height_px,
+          observations: orientationSamples.map((s) => ({ ...s, observation_source: 'orientation' })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Upload failed.');
+      return data;
+    }
+
     async function enterUploadStep() {
       showStep('upload');
       const heading = document.getElementById('upload-heading');
       const detail = document.getElementById('upload-detail');
       const againBtn = document.getElementById('record-another-btn');
+      const retryBtn = document.getElementById('retry-upload-btn');
       heading.textContent = 'Uploading…';
       detail.textContent = '';
       againBtn.style.display = 'none';
+      retryBtn.style.display = 'none';
 
       if (!currentFlightNumber) {
         heading.textContent = '⚠️ No flight to upload to';
@@ -690,35 +782,40 @@
         return;
       }
 
-      const cached = JSON.parse(localStorage.getItem(storageKey));
-      const calibration = cached.latest_calibration || {};
-      try {
-        const res = await fetch('/api/optical/stations/observations/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            device_token: cached.device_token,
-            flight_number: currentFlightNumber,
-            image_width_px: calibration.image_width_px,
-            image_height_px: calibration.image_height_px,
-            observations: orientationSamples.map((s) => ({ ...s, observation_source: 'orientation' })),
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Upload failed.');
-        heading.textContent = '✅ Uploaded!';
-        detail.textContent = `${data.pixels} of ${data.frames} orientation readings recorded.`;
-      } catch (err) {
-        heading.textContent = '⚠️ Upload failed';
-        detail.textContent = err.message;
+      for (let attempt = 0; attempt < UPLOAD_RETRY_DELAYS_MS.length; attempt++) {
+        if (UPLOAD_RETRY_DELAYS_MS[attempt] > 0) {
+          heading.textContent = `Uploading… retrying (${attempt}/${UPLOAD_RETRY_DELAYS_MS.length - 1})`;
+          await new Promise((resolve) => setTimeout(resolve, UPLOAD_RETRY_DELAYS_MS[attempt]));
+        }
+        try {
+          const data = await attemptUpload();
+          heading.textContent = '✅ Uploaded!';
+          detail.textContent = `${data.pixels} of ${data.frames} orientation readings recorded.`;
+          // Only clear the buffered flight data once the upload is
+          // actually confirmed - on failure it's kept below, so a
+          // transient error (the kind a flaky connection causes) can be
+          // retried instead of silently losing the whole flight.
+          orientationSamples = [];
+          nextFrameIndex = 0;
+          againBtn.style.display = 'block';
+          return;
+        } catch (err) {
+          if (attempt === UPLOAD_RETRY_DELAYS_MS.length - 1) {
+            heading.textContent = '⚠️ Upload failed';
+            detail.textContent = err.message;
+            retryBtn.style.display = 'block';
+            againBtn.style.display = 'block';
+          }
+        }
       }
-
-      orientationSamples = [];
-      nextFrameIndex = 0;
-      againBtn.style.display = 'block';
     }
 
+    document.getElementById('retry-upload-btn').addEventListener('click', enterUploadStep);
+
     document.getElementById('record-another-btn').addEventListener('click', () => {
+      // A pending ready report from a previous flight shouldn't leak into
+      // the next one.
+      reportReadyPending = false;
       const readyBtn = document.getElementById('report-ready-btn');
       readyBtn.style.display = 'block';
       readyBtn.disabled = true;

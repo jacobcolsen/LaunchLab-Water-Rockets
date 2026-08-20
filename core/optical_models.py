@@ -42,6 +42,12 @@ class TrackingSession(models.Model):
         default=False, help_text="True for mock/synthetic data, never a real flight."
     )
     notes = models.TextField(blank=True, default="")
+    live_flight_started_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text="Set when countdown_start is relayed, cleared on flight_landed - lets a "
+        "reconnecting station (core.optical_consumers) learn whether it should currently "
+        "be recording, the same way TrackingStation.last_seen_at backs live presence.",
+    )
 
     def __str__(self):
         return self.name

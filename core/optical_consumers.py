@@ -18,6 +18,14 @@ device_token, rather than a `?device_token=` query string at connect.
 No WS-pushed roster state either - the control page already polls the
 roster REST endpoint every 5s, so `connected` just needs to be backed by
 a fresh last_seen_at for that polling to pick up.
+
+Recording state also persists server-side (TrackingSession.live_flight_
+started_at, set on countdown_start and cleared on flight_landed) so a
+station that reconnects/re-identifies mid-flight - after missing the
+original broadcast entirely - can be told directly whether it should
+currently be recording, via a `flight_state_sync` reply sent only to
+that one socket, rather than a fire-and-forget group message it may
+never have received.
 """
 import asyncio
 import json
@@ -28,7 +36,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import timezone
 
 from .basic_auth import check_basic_auth
-from .optical_models import TrackingStation
+from .optical_models import TrackingSession, TrackingStation
 
 HEARTBEAT_INTERVAL_SECONDS = 5
 HEARTBEAT_TIMEOUT_SECONDS = 15
@@ -79,6 +87,17 @@ class TrackingSessionConsumer(AsyncWebsocketConsumer):
                 if self.station_id and not self.heartbeat_task:
                     self.last_pong = time.monotonic()
                     self.heartbeat_task = asyncio.create_task(self.heartbeat_loop())
+                if self.station_id:
+                    # Catches up a reconnecting/late-identifying station on
+                    # whether a flight is currently live, regardless of
+                    # whether it was connected in time for the original
+                    # countdown_start/flight_landed broadcast - the station
+                    # side's autoStartRecording/autoStopRecording are both
+                    # idempotent no-ops if it's already in the right state.
+                    recording_active = await self.get_live_flight_started_at() is not None
+                    await self.send(text_data=json.dumps(
+                        {"type": "flight_state_sync", "recording_active": recording_active}
+                    ))
             return
 
         if message_type == "pong" and self.station_id:
@@ -87,6 +106,10 @@ class TrackingSessionConsumer(AsyncWebsocketConsumer):
             return
 
         if message_type in RELAYED_MESSAGE_TYPES:
+            if message_type == "countdown_start":
+                await self.set_live_flight_started_at(timezone.now())
+            elif message_type == "flight_landed":
+                await self.set_live_flight_started_at(None)
             await self.channel_layer.group_send(
                 self.group_name,
                 {"type": "relay.message", "payload": payload},
@@ -134,3 +157,12 @@ class TrackingSessionConsumer(AsyncWebsocketConsumer):
     @database_sync_to_async
     def clear_station_last_seen(self, station_id):
         TrackingStation.objects.filter(pk=station_id).update(last_seen_at=None)
+
+    @database_sync_to_async
+    def set_live_flight_started_at(self, value):
+        TrackingSession.objects.filter(pk=self.session_id).update(live_flight_started_at=value)
+
+    @database_sync_to_async
+    def get_live_flight_started_at(self):
+        session = TrackingSession.objects.filter(pk=self.session_id).first()
+        return session.live_flight_started_at if session else None

@@ -1,0 +1,136 @@
+OFFLINE / NO-INTERNET FIELD OPERATION — BRAINSTORM (not a plan, nothing built yet)
+====================================================================================
+
+THE ASK
+--------
+Recent test had sensor stations disconnecting often. Longer-term goal:
+run competitions in the mountains with zero cell service and zero WiFi
+infrastructure - the app needs to work with no internet connection at
+all.
+
+These are actually two separate problems worth untangling first.
+
+
+PROBLEM 1: WHY YOUR RECENT TEST HAD DISCONNECTS
+--------------------------------------------------
+Almost certainly the ngrok tunnel, not the app itself. The URL you were
+testing against (crate-strategy-renewable.ngrok-free.dev) means every
+single request - HTTP AND the WebSocket used for the countdown/ceremony
+relay - was taking a long round trip: phone -> cell tower -> internet ->
+ngrok's servers -> back down to your laptop, and then all the way back.
+That's a lot of hops, and the free ngrok tier adds its own latency/
+connection limits on top. A shaky cell signal anywhere along that path
+(very plausible outdoors) drops the WebSocket, and the app's existing
+auto-reconnect (RECONNECT_DELAY_MS = 3000 in optical_station.html)
+kicks in but needs a few seconds each time - which reads as "disconnecting
+often" even though the app itself never crashed.
+
+This problem mostly goes away on its own once you stop routing through
+ngrok/the internet at all - which is exactly what Problem 2 requires
+anyway. So fixing the mountain use case should also fix this.
+
+
+PROBLEM 2: TRUE ZERO-INTERNET FIELD OPERATION
+-------------------------------------------------
+Good news: the backend is already built in a way that doesn't strictly
+need the internet at all - `ALLOWED_HOSTS=*` in the current .env means
+it already accepts requests to any hostname/IP, and the whole stack
+(Django + Postgres + Redis) already runs self-contained via
+docker-compose on a laptop. The missing piece is purely "how do phones
+in a field with no cell/WiFi infrastructure reach that laptop."
+
+THE CORE IDEA: bring your own local WiFi network - not connected to the
+internet at all, just phones and the laptop talking directly to each
+other. No ngrok, no cloud, no domain name needed for game day.
+
+Option A - Dedicated battery-powered travel router (recommended)
+--------------------------------------------------------------------
+Small travel routers (GL.iNet and similar, ~$30-60, USB battery or
+power-bank powered) can run in pure access-point mode - they create a
+local WiFi network without needing any uplink/WAN connection at all.
+Laptop plugs into it (or joins its WiFi), phones join its WiFi, laptop
+runs the Django server, everyone reaches it over the local network
+using the laptop's local IP (e.g. 192.168.8.100) instead of a public
+URL. Nothing here depends on cell towers or any internet backbone -
+it's a closed local network you're carrying with you.
+
+Pros: reliable, doesn't depend on any single phone, works the same
+every time regardless of location. Cons: one more piece of hardware to
+buy, charge, and not forget at home.
+
+Option B - A phone's Personal Hotspot
+------------------------------------------
+Tempting since you already have phones, but worth flagging: iPhone
+Personal Hotspot generally shares the phone's *cellular data connection*
+over WiFi - with zero cell service, this is unreliable and sometimes
+won't even turn the WiFi radio on at all. Not a dependable option for
+the actual "no cell service" scenario, even though it works fine as a
+quick local-network trick when you DO have some signal.
+
+Option C - Laptop's own WiFi as the access point
+-----------------------------------------------------
+Many laptops can host their own WiFi network directly (no router
+needed) - one less thing to carry, but range/reliability outdoors and
+across a spread-out field (stations 25-75m+ apart, per the Station
+Layout planner) is a real concern, and it ties the network's fate
+directly to the laptop never needing to sleep/restart. A dedicated
+router is more robust for exactly the kind of spread-out outdoor
+layout this app is built around.
+
+
+THE CATCH: HTTPS STILL HAS TO WORK, EVEN OFFLINE
+-----------------------------------------------------
+This is the one genuinely tricky part, worth calling out clearly now
+rather than discovering it in the field. Camera access (getUserMedia)
+and iOS's motion-permission prompt both require a "secure context" -
+HTTPS. A plain local IP like http://192.168.8.100:8000 does NOT count
+as secure to a browser (only https:// or the literal word "localhost"
+do), so phones would hit the same silent camera/permission failures
+this project already ran into once before, for a different reason.
+
+The fix is well-trodden but needs setting up once, in advance, at home
+with real internet - not something to improvise in the field:
+- A tool like mkcert can generate a private, local Certificate
+  Authority plus a real HTTPS certificate for your laptop's local
+  address (or, better, a stable local hostname like
+  waterrocketlab.local via mDNS/Bonjour, so it survives the laptop
+  getting a different IP from the travel router each time).
+- That CA's root certificate gets installed and trusted on every
+  phone once, ahead of time (a one-time Settings step per phone) -
+  after that, https://waterrocketlab.local:8000 (or whatever hostname)
+  works offline indefinitely, no internet needed ever again for that
+  trust to keep working.
+- This only needs to be done once per phone, not once per competition -
+  a station phone that's been set up before stays set up.
+
+
+WHAT THIS WOULD ACTUALLY TAKE TO STAND UP
+----------------------------------------------
+Nothing here requires new app code - the app already works fine over a
+LAN today (Docker stack, ALLOWED_HOSTS=*, existing WS reconnect logic).
+This is really an infrastructure/setup task, not a coding task:
+1. Buy a small battery-powered travel router (if going with Option A).
+2. Set it up in pure access-point mode, no WAN needed.
+3. Generate a local CA + certificate (mkcert) for a stable local
+   hostname, once, at home.
+4. Install/trust that CA's root cert on every phone that'll ever be a
+   station, once, at home (with real internet, before heading out).
+5. Run the existing docker-compose stack on the laptop, connected to
+   the travel router's network, using the trusted hostname/cert
+   instead of ngrok.
+6. Write down the one-time-per-phone setup steps somewhere so it's
+   repeatable/teachable, since it's a real (if small) technical setup
+   burden compared to "just click the ngrok link."
+
+Could also write a short setup script/checklist as an actual build
+task later, if you want - but that's a documentation/tooling task, not
+a change to the tracking app itself.
+
+
+WHERE I'D START
+-----------------
+Test Option A (a cheap travel router + mkcert-based local HTTPS) once,
+somewhere with real internet available as a fallback, before trusting
+it for an actual out-of-cell-range competition - confirms the whole
+chain (router range, cert trust, Docker stack reachability) works
+before it's the only option available in the mountains.
